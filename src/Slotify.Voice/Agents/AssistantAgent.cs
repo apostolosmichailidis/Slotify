@@ -56,8 +56,9 @@ public sealed class AssistantAgent(
                 },
             });
 
-    private IReadOnlyList<LlmTool> _tools = [EndCallTool];
+    private IReadOnlyList<LlmTool> _tools = [EndCallTool, MessageTool.Definition];
     private BookingTools? _booking;
+    private CallMessage? _message;
 
     private readonly Conversation _conversation = new();
     private readonly StringBuilder _pendingUserText = new();
@@ -95,12 +96,23 @@ public sealed class AssistantAgent(
     public CallOutcome Outcome =>
         _booking?.LastBooking is not null ? CallOutcome.AppointmentBooked
         : _failed ? CallOutcome.Failed
+        : _message is not null ? CallOutcome.MessageTaken
         : _userTurns > 0 ? CallOutcome.Completed
         : CallOutcome.Abandoned;
 
-    public string? Summary => _booking?.LastBooking is { } b
-        ? $"Ραντεβού: {b.Service}, {GreekText.DateTime(b.LocalStart)}, {b.PatientName}, {b.Phone}"
-        : null;
+    public string? Summary
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (_booking?.LastBooking is { } b)
+                parts.Add($"Ραντεβού: {b.Service}, {GreekText.DateTime(b.LocalStart)}, {b.PatientName}, {b.Phone}");
+            if (_message is not null) parts.Add(_message.Summary);
+            return parts.Count == 0 ? null : string.Join("\n", parts);
+        }
+    }
+
+    public Booking? Booking => _booking?.LastBooking;
 
     public string? Transcript
     {
@@ -117,7 +129,7 @@ public sealed class AssistantAgent(
         if (calendarEnabled)
         {
             _booking = new BookingTools(context.Clinic, context.Call.FromNumber, context.Call.CallSid, calendar, time, logger);
-            _tools = [EndCallTool, .. _booking.Tools];
+            _tools = [EndCallTool, MessageTool.Definition, .. _booking.Tools];
         }
 
         _system = prompts.Build(context.Clinic, greeting, context.Call.FromNumber, calendarEnabled);
@@ -448,6 +460,13 @@ public sealed class AssistantAgent(
             return (call.Id, "Η κλήση κλείνει.", false);
         }
 
+        if (call.Name == MessageTool.Name)
+        {
+            var (message, text) = MessageTool.Parse(call.Input, _context.Call.FromNumber);
+            if (message is not null) _message = message;
+            return (call.Id, text, message is null);
+        }
+
         try
         {
             if (_booking is not null && await _booking.TryExecuteAsync(call, _lifetime.Token) is { } result)
@@ -462,8 +481,8 @@ public sealed class AssistantAgent(
             // Ένα πρόβλημα στο ημερολόγιο δεν πρέπει να κλείσει την κλήση.
             logger.LogError(ex, "Το εργαλείο {Tool} απέτυχε", call.Name);
             return (call.Id,
-                "Τεχνικό πρόβλημα με το ημερολόγιο. Πάρε όνομα, υπηρεσία και ώρα που τον βολεύει, " +
-                "και πες ότι το ιατρείο θα τον καλέσει για επιβεβαίωση.", true);
+                "Τεχνικό πρόβλημα με το ημερολόγιο. Πάρε όνομα, υπηρεσία και ώρα που τον βολεύει, κατέγραψέ τα " +
+                "με το take_message και πες ότι το ιατρείο θα τον καλέσει για επιβεβαίωση.", true);
         }
 
         return (call.Id, $"Άγνωστο εργαλείο {call.Name}", true);

@@ -105,13 +105,24 @@ namespace Slotify.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<string>("NotificationEmail")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
                     b.Property<string>("PhoneNumber")
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
+                    b.Property<bool>("SendPatientSms")
+                        .HasColumnType("boolean");
+
                     b.Property<int>("SlotStepMinutes")
                         .HasColumnType("integer");
+
+                    b.Property<string>("SmsSenderId")
+                        .HasMaxLength(11)
+                        .HasColumnType("character varying(11)");
 
                     b.Property<string>("TimeZoneId")
                         .IsRequired()
@@ -206,6 +217,71 @@ namespace Slotify.Data.Migrations
                     b.ToTable("opening_hours", (string)null);
                 });
 
+            modelBuilder.Entity("Slotify.Core.Notifications.Notification", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("CallId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("ClinicId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTimeOffset>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ProviderId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<int?>("Segments")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("SentAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Subject")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("To")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CallId");
+
+                    b.HasIndex("NextAttemptAt")
+                        .HasFilter("\"SentAt\" IS NULL");
+
+                    b.HasIndex("ClinicId", "CreatedAt");
+
+                    b.ToTable("notifications", (string)null);
+                });
+
             modelBuilder.Entity("Slotify.Core.Calls.Call", b =>
                 {
                     b.HasOne("Slotify.Core.Clinics.Clinic", null)
@@ -239,6 +315,20 @@ namespace Slotify.Data.Migrations
                         .WithMany("OpeningHours")
                         .HasForeignKey("ClinicId")
                         .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Slotify.Core.Notifications.Notification", b =>
+                {
+                    b.HasOne("Slotify.Core.Calls.Call", null)
+                        .WithMany()
+                        .HasForeignKey("CallId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Slotify.Core.Clinics.Clinic", null)
+                        .WithMany()
+                        .HasForeignKey("ClinicId")
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
 

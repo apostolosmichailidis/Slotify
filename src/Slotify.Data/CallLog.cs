@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Slotify.Core.Abstractions;
 using Slotify.Core.Calls;
+using Slotify.Core.Notifications;
 
 namespace Slotify.Data;
 
@@ -19,6 +20,7 @@ internal sealed class CallLog(IDbContextFactory<SlotifyDbContext> dbFactory, ILo
         CallOutcome outcome,
         string? summary = null,
         string? transcript = null,
+        IReadOnlyList<Notification>? notifications = null,
         CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -33,6 +35,13 @@ internal sealed class CallLog(IDbContextFactory<SlotifyDbContext> dbFactory, ILo
         call.Outcome = outcome;
         call.Summary = summary ?? call.Summary;
         call.Transcript = transcript ?? call.Transcript;
+
+        foreach (var n in notifications ?? [])
+        {
+            n.CallId = call.Id;
+            db.Notifications.Add(n);
+        }
+
         await db.SaveChangesAsync(ct);
     }
 }

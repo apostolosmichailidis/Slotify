@@ -1,0 +1,35 @@
+@using Slotify.Core.Notifications
+
+@if (Status is { } n)
+{
+    @if (n.SentAt is not null)
+    {
+        <span class="badge badge-good" title="@n.ProviderId">Στάλθηκε @Display.Time(n.SentAt.Value)@(n.Segments is > 0 ? $" · {n.Segments} κομμ." : "")</span>
+    }
+    else if (n.GaveUp)
+    {
+        <span class="badge badge-bad" title="@n.Error">Απέτυχε</span>
+        <span class="small muted">@n.Error</span>
+    }
+    else if (n.Attempts > 0)
+    {
+        <span class="badge badge-live" title="@n.Error">Ξαναδοκιμάζει (@n.Attempts)</span>
+        <span class="small muted">@n.Error</span>
+    }
+    else
+    {
+        <span class="badge badge-muted">Σε αναμονή</span>
+        @if (ShowWaitingHint)
+        {
+            <span class="small muted">Το στέλνει το Voice. Αν μείνει εδώ, έλεγξε ότι τρέχει.</span>
+        }
+    }
+}
+
+@code {
+    [Parameter]
+    public Notification? Status { get; set; }
+
+    [Parameter]
+    public bool ShowWaitingHint { get; set; } = true;
+}

@@ -1,5 +1,6 @@
 using Slotify.Core.Calls;
 using Slotify.Core.Clinics;
+using Slotify.Voice.Scheduling;
 using Slotify.Voice.Twilio;
 
 namespace Slotify.Voice.Agents;
@@ -32,6 +33,9 @@ public interface IVoiceAgent : IAsyncDisposable
 
     /// <summary>Σύντομη περίληψη για τον γιατρό (π.χ. το ραντεβού που κλείστηκε).</summary>
     string? Summary => null;
+
+    /// <summary>Το ραντεβού που κλείστηκε, αν κλείστηκε. Από αυτό φτιάχνεται το SMS στον ασθενή.</summary>
+    Booking? Booking => null;
 }
 
 public sealed class VoiceAgentFactory(IServiceProvider services, Microsoft.Extensions.Options.IOptions<VoiceOptions> options)

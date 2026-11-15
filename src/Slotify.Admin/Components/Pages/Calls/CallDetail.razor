@@ -38,6 +38,23 @@ else
         }
     </section>
 
+    @if (call.Notifications.Count > 0)
+    {
+        <section class="card">
+            <h2>Ειδοποιήσεις</h2>
+            <ul class="notif-list">
+                @foreach (var n in call.Notifications)
+                {
+                    <li>
+                        <strong>@(n.Channel == Slotify.Core.Notifications.NotificationChannel.Sms ? "SMS στον ασθενή" : "Email στο ιατρείο")</strong>
+                        <span class="mono small">@n.To</span>
+                        <NotificationStatus Status="n" ShowWaitingHint="false" />
+                    </li>
+                }
+            </ul>
+        </section>
+    }
+
     <section class="card">
         <h2>Απομαγνητοφώνηση</h2>
         @if (lines.Count == 0)

@@ -268,3 +268,14 @@ input.mono { font-family: var(--mono); }
     background: var(--bad-bg); color: var(--bad); padding: 1rem; border-radius: 8px;
 }
 .blazor-error-boundary::after { content: "Κάτι πήγε στραβά σε αυτό το κομμάτι της σελίδας."; }
+
+/* Ειδοποιήσεις */
+.test-row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin: -.4rem 0 1.1rem; }
+.test-phone { max-width: 160px; }
+.sms-preview {
+    background: var(--neutral-bg); border-radius: 14px 14px 14px 4px; padding: .6rem .85rem;
+    font-size: .92rem; max-width: 360px;
+}
+.notif-list { list-style: none; margin: 0; padding: 0; }
+.notif-list li { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; padding: .45rem 0; border-bottom: 1px solid var(--line); }
+.notif-list li:last-child { border-bottom: none; }

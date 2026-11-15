@@ -53,6 +53,12 @@ public sealed class TwilioOptions
 {
     public const string Section = "Twilio";
 
+    /// <summary>Η διεύθυνση του Twilio API. Αλλάζει μόνο για δοκιμές.</summary>
+    public string ApiBaseUrl { get; set; } = "https://api.twilio.com";
+
+    /// <summary>Το Account SID (AC…). Χρειάζεται μόνο για τα SMS στους ασθενείς.</summary>
+    public string? AccountSid { get; set; }
+
     /// <summary>Το Auth Token του λογαριασμού Twilio, για να ελέγχουμε ότι οι κλήσεις έρχονται όντως από εκεί.</summary>
     public string? AuthToken { get; set; }
 

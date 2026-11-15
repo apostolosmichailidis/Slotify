@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Slotify.Core.Abstractions;
 using Slotify.Core.Calls;
 using Slotify.Voice.Agents;
+using Slotify.Voice.Notifications;
 
 namespace Slotify.Voice.Twilio;
 
@@ -29,6 +30,7 @@ public sealed class CallSessionRunner(
         var stream = new TwilioMediaStream(socket, logger);
         IVoiceAgent? agent = null;
         Call? call = null;
+        Slotify.Core.Clinics.Clinic? clinic = null;
         var failed = false;
 
         try
@@ -50,7 +52,7 @@ public sealed class CallSessionRunner(
                             return;
                         }
 
-                        var clinic = await clinics.GetAsync(clinicId, ct);
+                        clinic = await clinics.GetAsync(clinicId, ct);
                         if (clinic is null)
                         {
                             logger.LogWarning("Το ιατρείο {ClinicId} δεν υπάρχει πια", clinicId);
@@ -112,9 +114,12 @@ public sealed class CallSessionRunner(
             var outcome = failed ? CallOutcome.Failed : agent?.Outcome ?? CallOutcome.Abandoned;
             var transcript = agent?.Transcript;
             var summary = agent?.Summary;
-            if (call is not null)
-                await SafelyAsync(() => callLog.CompleteAsync(call.CallSid, outcome, summary, transcript, CancellationToken.None),
+            if (call is not null && clinic is not null)
+            {
+                var notifications = CallNotifications.Compose(clinic, call, outcome, summary, agent?.Booking);
+                await SafelyAsync(() => callLog.CompleteAsync(call.CallSid, outcome, summary, transcript, notifications, CancellationToken.None),
                     "καταγραφή τέλους");
+            }
 
             await stream.HangUpAsync(CancellationToken.None);
         }

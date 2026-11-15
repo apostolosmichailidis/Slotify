@@ -1,4 +1,5 @@
 @inject ClinicEditor Editor
+@using Slotify.Core.Notifications
 
 <EditForm Model="form" OnValidSubmit="SaveAsync" FormName="clinic-details" class="card form">
     <DataAnnotationsValidator />
@@ -78,6 +79,53 @@
         </InputSelect>
     </label>
 
+    <h2>Ειδοποιήσεις</h2>
+    <label class="field">
+        <span>Email γιατρού</span>
+        <InputText @bind-Value="form.NotificationEmail" placeholder="γιατρός@gmail.com, γραμματεία@ιατρείο.gr" />
+        <small>
+            Email μετά από κάθε κλήση που θέλει κάτι από το ιατρείο: νέο ραντεβού, μήνυμα για να καλέσει πίσω, κλήση που κόπηκε.
+            Μία ή περισσότερες διευθύνσεις, με κόμμα. Κενό = χωρίς email.
+        </small>
+    </label>
+    @if (Clinic is not null)
+    {
+        <div class="test-row">
+            <button class="btn btn-small" type="button" @onclick="TestEmailAsync"
+                    disabled="@(testing || string.IsNullOrWhiteSpace(Clinic.NotificationEmail))">Δοκιμαστικό email</button>
+            <NotificationStatus Status="emailTest" />
+        </div>
+    }
+
+    <label class="check">
+        <InputCheckbox @bind-Value="form.SendPatientSms" />
+        <span>SMS επιβεβαίωσης στον ασθενή όταν κλείνει ραντεβού <span class="muted">(χρεώνεται χωριστά)</span></span>
+    </label>
+    @if (form.SendPatientSms)
+    {
+        <div class="grid-2">
+            <label class="field">
+                <span>Αποστολέας SMS</span>
+                <InputText @bind-Value="form.SmsSenderId" placeholder="DrPapadop" maxlength="11" class="mono" />
+                <small>Έως 11 λατινικά γράμματα ή αριθμοί. Ο ασθενής το βλέπει ως αποστολέα και δεν μπορεί να απαντήσει.</small>
+            </label>
+            <div class="field">
+                <span>Έτσι θα φαίνεται</span>
+                <div class="sms-preview">@SmsPreview</div>
+                <small>@SmsText.Segments(SmsPreview) @(SmsText.Segments(SmsPreview) == 1 ? "κομμάτι" : "κομμάτια") ανά SMS (με ελληνικά χωράνε 70 χαρακτήρες στο κομμάτι). Μόνο σε ελληνικά κινητά.</small>
+            </div>
+        </div>
+        @if (Clinic is not null)
+        {
+            <div class="test-row">
+                <input class="test-phone" @bind="testMobile" placeholder="69xxxxxxxx" inputmode="tel" />
+                <button class="btn btn-small" type="button" @onclick="TestSmsAsync"
+                        disabled="@(testing || string.IsNullOrWhiteSpace(Clinic.SmsSenderId))">Δοκιμαστικό SMS</button>
+                <NotificationStatus Status="smsTest" />
+            </div>
+        }
+    }
+
     @if (error is not null)
     {
         <div class="alert alert-bad">@error</div>
@@ -106,6 +154,49 @@
     private bool saving;
     private string? error;
     private DateTime? savedAt;
+
+    private Notification? emailTest;
+    private Notification? smsTest;
+    private string? testMobile;
+    private bool testing;
+
+    private string SmsPreview => SmsText.BookingConfirmation(
+        string.IsNullOrWhiteSpace(form.Name) ? "Ιατρείο" : form.Name.Trim(),
+        string.IsNullOrWhiteSpace(form.PhoneNumber) ? "2310123456" : form.PhoneNumber.Trim(),
+        "Καθαρισμός", new DateTime(2026, 11, 17, 10, 30, 0));
+
+    private Task TestEmailAsync() => RunTestAsync(() => Editor.QueueTestEmailAsync(Clinic!.Id), n => emailTest = n);
+
+    private Task TestSmsAsync() => RunTestAsync(() => Editor.QueueTestSmsAsync(Clinic!.Id, testMobile), n => smsTest = n);
+
+    /// <summary>Γράφει το δοκιμαστικό και περιμένει ως ένα λεπτό να το στείλει το Voice, δείχνοντας την κατάσταση.</summary>
+    private async Task RunTestAsync(Func<Task<EditResult>> queue, Action<Notification?> show)
+    {
+        testing = true;
+        error = null;
+        try
+        {
+            var result = await queue();
+            if (!result.Ok)
+            {
+                error = result.Error;
+                return;
+            }
+
+            for (var i = 0; i < 30; i++)
+            {
+                var n = await Editor.GetNotificationAsync(result.Id!.Value);
+                show(n);
+                StateHasChanged();
+                if (n is null || n.SentAt is not null || n.GaveUp) return;
+                await Task.Delay(2000);
+            }
+        }
+        finally
+        {
+            testing = false;
+        }
+    }
 
     private string DefaultGreeting =>
         new Clinic { Name = string.IsNullOrWhiteSpace(form.Name) ? "…" : form.Name, PhoneNumber = "" }.EffectiveGreeting;

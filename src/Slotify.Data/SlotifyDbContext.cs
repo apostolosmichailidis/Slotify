@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Slotify.Core.Calls;
 using Slotify.Core.Clinics;
+using Slotify.Core.Notifications;
 
 namespace Slotify.Data;
 
@@ -11,6 +12,7 @@ public class SlotifyDbContext(DbContextOptions<SlotifyDbContext> options) : DbCo
     public DbSet<ClinicService> Services => Set<ClinicService>();
     public DbSet<ClinicClosure> Closures => Set<ClinicClosure>();
     public DbSet<Call> Calls => Set<Call>();
+    public DbSet<Notification> Notifications => Set<Notification>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -23,6 +25,8 @@ public class SlotifyDbContext(DbContextOptions<SlotifyDbContext> options) : DbCo
             e.Property(x => x.TimeZoneId).HasMaxLength(64);
             e.Property(x => x.GoogleCalendarId).HasMaxLength(256);
             e.Property(x => x.Greeting).HasMaxLength(1000);
+            e.Property(x => x.NotificationEmail).HasMaxLength(500);
+            e.Property(x => x.SmsSenderId).HasMaxLength(11);
 
             e.Ignore(x => x.EffectiveGreeting);
             e.Ignore(x => x.TimeZone);
@@ -50,6 +54,25 @@ public class SlotifyDbContext(DbContextOptions<SlotifyDbContext> options) : DbCo
             e.ToTable("clinic_closures");
             e.HasIndex(x => new { x.ClinicId, x.Date }).IsUnique();
             e.Property(x => x.Reason).HasMaxLength(200);
+        });
+
+        b.Entity<Notification>(e =>
+        {
+            e.ToTable("notifications");
+            e.Property(x => x.Channel).HasConversion<string>().HasMaxLength(16);
+            e.Property(x => x.To).HasMaxLength(500);
+            e.Property(x => x.Subject).HasMaxLength(300);
+            e.Property(x => x.Error).HasMaxLength(500);
+            e.Property(x => x.ProviderId).HasMaxLength(100);
+            e.Ignore(x => x.GaveUp);
+
+            // Ο worker ψάχνει ό,τι δεν έχει σταλεί. Μερικό index: μένει μικρό όσο κι αν μεγαλώσει ο πίνακας.
+            e.HasIndex(x => x.NextAttemptAt).HasFilter("\"SentAt\" IS NULL");
+            e.HasIndex(x => new { x.ClinicId, x.CreatedAt });
+            e.HasIndex(x => x.CallId);
+
+            e.HasOne<Clinic>().WithMany().HasForeignKey(x => x.ClinicId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Call>().WithMany().HasForeignKey(x => x.CallId).OnDelete(DeleteBehavior.Restrict);
         });
 
         b.Entity<Call>(e =>

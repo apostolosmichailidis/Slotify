@@ -3,6 +3,7 @@ using Slotify.Data;
 using Slotify.Voice;
 using Slotify.Voice.Agents;
 using Slotify.Voice.Llm;
+using Slotify.Voice.Notifications;
 using Slotify.Voice.Scheduling;
 using Slotify.Voice.Speech;
 using Slotify.Voice.Twilio;
@@ -45,6 +46,12 @@ builder.Services.AddHttpClient<ILanguageModel, AnthropicLanguageModel>(c => c.Ti
 builder.Services.AddOptions<GoogleOptions>().Bind(builder.Configuration.GetSection(GoogleOptions.Section));
 builder.Services.AddHttpClient(GoogleCalendar.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddSingleton<ICalendar, GoogleCalendar>();
+
+// Email στα ιατρεία και SMS στους ασθενείς. Γράφονται στη βάση στο τέλος της κλήσης και τα στέλνει ο worker.
+builder.Services.AddOptions<EmailOptions>().Bind(builder.Configuration.GetSection(EmailOptions.Section));
+builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
+builder.Services.AddHttpClient<ISmsSender, TwilioSmsSender>(c => c.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddHostedService<NotificationWorker>();
 
 // Τα κλειδιά ελέγχονται στην εκκίνηση μόνο όταν τρέχει η κανονική γραμματεία,
 // ώστε το Echo να δουλεύει χωρίς λογαριασμούς.
