@@ -35,6 +35,18 @@ public sealed class VoiceOptions
 
     /// <summary>Το Google Calendar του δοκιμαστικού ιατρείου (π.χ. το email σου ή ένα νέο ημερολόγιο).</summary>
     public string? DemoClinicCalendarId { get; set; }
+
+    /// <summary>Μετά από τόση σιωπή του καλούντα (αφού μιλήσει η γραμματεία) ρωτάμε «Είστε ακόμα εκεί;».</summary>
+    [Range(3, 120)]
+    public int SilencePromptSeconds { get; set; } = 12;
+
+    /// <summary>Αν μετά την ερώτηση συνεχίσει η σιωπή για τόσα δευτερόλεπτα, αντίο και κλείσιμο.</summary>
+    [Range(3, 120)]
+    public int SilenceHangUpSeconds { get; set; } = 10;
+
+    /// <summary>Μέγιστη διάρκεια κλήσης. Μετά η γραμματεία κλείνει ευγενικά, για να μην καίγονται λεπτά.</summary>
+    [Range(1, 60)]
+    public int MaxCallMinutes { get; set; } = 10;
 }
 
 public sealed class TwilioOptions

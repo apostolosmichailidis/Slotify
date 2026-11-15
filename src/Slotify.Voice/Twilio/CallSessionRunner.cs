@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using Microsoft.Extensions.Options;
 using Slotify.Core.Abstractions;
 using Slotify.Core.Calls;
 using Slotify.Voice.Agents;
@@ -14,10 +15,17 @@ public sealed class CallSessionRunner(
     ICallLog callLog,
     StreamTokens tokens,
     VoiceAgentFactory agents,
+    IOptions<VoiceOptions> options,
     ILogger<CallSessionRunner> logger)
 {
-    public async Task RunAsync(WebSocket socket, CancellationToken ct)
+    public async Task RunAsync(WebSocket socket, CancellationToken requestAborted)
     {
+        // Σκληρό όριο για κάθε agent (και για Echo/Silent): ένα λεπτό μετά το ευγενικό
+        // κλείσιμο του AssistantAgent, σε περίπτωση που κάτι κολλήσει.
+        using var hardLimit = CancellationTokenSource.CreateLinkedTokenSource(requestAborted);
+        hardLimit.CancelAfter(TimeSpan.FromMinutes(options.Value.MaxCallMinutes + 1));
+        var ct = hardLimit.Token;
+
         var stream = new TwilioMediaStream(socket, logger);
         IVoiceAgent? agent = null;
         Call? call = null;
@@ -88,7 +96,9 @@ public sealed class CallSessionRunner(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Ο καλών έκλεισε ή σταματά ο server.
+            // Ο καλών έκλεισε, σταματά ο server ή πιάσαμε το σκληρό όριο.
+            if (!requestAborted.IsCancellationRequested)
+                logger.LogWarning("Η κλήση {CallSid} έκλεισε από το σκληρό όριο διάρκειας", call?.CallSid);
         }
         catch (Exception ex)
         {

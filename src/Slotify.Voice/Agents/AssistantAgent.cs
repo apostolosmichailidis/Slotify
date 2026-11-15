@@ -30,9 +30,15 @@ public sealed class AssistantAgent(
     PromptBuilder prompts,
     ICalendar calendar,
     IOptions<GoogleOptions> google,
+    IOptions<VoiceOptions> voice,
     TimeProvider time,
     ILogger<AssistantAgent> logger) : IVoiceAgent
 {
+    private const string StillTherePrompt = "Είστε ακόμα εκεί;";
+    private const string SilenceGoodbye = "Δεν σας ακούω. Αν χρειάζεστε κάτι, καλέστε μας ξανά. Γεια σας.";
+    private const string MaxDurationGoodbye =
+        "Λυπάμαι, πρέπει να κλείσω τη γραμμή. Αν χρειάζεστε κάτι ακόμα, καλέστε μας ξανά. Γεια σας.";
+
     private const int MaxToolRounds = 5;
 
     /// <summary>Τόσα γράμματα σε ενδιάμεσο κείμενο αρκούν για να θεωρηθεί ότι ο καλών μιλάει (όχι θόρυβος).</summary>
@@ -79,6 +85,13 @@ public sealed class AssistantAgent(
     private volatile bool _hangingUp;
     private volatile bool _failed;
 
+    // Ό,τι αλλάζει τη ροή της συζήτησης (ακρόαση, διακοπές, χρονόμετρα) περνάει από εδώ, ένα τη φορά.
+    private readonly SemaphoreSlim _control = new(1, 1);
+    private Task _watchdog = Task.CompletedTask;
+    private DateTimeOffset _startedAt;
+    private DateTimeOffset _quietSince;
+    private bool _askedIfStillThere;
+
     public CallOutcome Outcome =>
         _booking?.LastBooking is not null ? CallOutcome.AppointmentBooked
         : _failed ? CallOutcome.Failed
@@ -109,8 +122,10 @@ public sealed class AssistantAgent(
 
         _system = prompts.Build(context.Clinic, greeting, context.Call.FromNumber, calendarEnabled);
 
+        _startedAt = _quietSince = time.GetUtcNow();
         _stt = await speechToText.StartAsync(ct);
         _listenLoop = Task.Run(() => ListenLoopAsync(_lifetime.Token));
+        _watchdog = Task.Run(() => WatchdogLoopAsync(_lifetime.Token));
 
         AddTranscript("Γραμματεία", greeting);
         _greeting = Task.Run(async () =>
@@ -146,31 +161,46 @@ public sealed class AssistantAgent(
         {
             await foreach (var ev in _stt!.Events.ReadAllAsync(ct))
             {
-                switch (ev)
+                await _control.WaitAsync(ct);
+                try
                 {
-                    case SttTranscript t:
-                        if (t.Text.Length >= BargeInMinChars && IsBusy && !_hangingUp)
-                            await InterruptAsync();
+                    switch (ev)
+                    {
+                        case SttTranscript t:
+                            if (t.Text.Length > 0)
+                            {
+                                // Ο καλών μιλάει: η σιωπή μετράει από την αρχή.
+                                _quietSince = time.GetUtcNow();
+                                _askedIfStillThere = false;
+                            }
 
-                        if (t.IsFinal && t.Text.Length > 0)
-                            _pendingUserText.Append(' ').Append(t.Text);
+                            if (t.Text.Length >= BargeInMinChars && IsBusy && !_hangingUp)
+                                await InterruptAsync();
 
-                        if (t.SpeechFinal)
+                            if (t.IsFinal && t.Text.Length > 0)
+                                _pendingUserText.Append(' ').Append(t.Text);
+
+                            if (t.SpeechFinal)
+                                await RespondToPendingAsync();
+                            break;
+
+                        case SttUtteranceEnd:
                             await RespondToPendingAsync();
-                        break;
+                            break;
 
-                    case SttUtteranceEnd:
-                        await RespondToPendingAsync();
-                        break;
-
-                    case SttClosed closed:
-                        logger.LogWarning("Η αναγνώριση φωνής σταμάτησε: {Reason}", closed.Reason);
-                        if (!_lifetime.IsCancellationRequested)
-                        {
-                            _failed = true;
-                            await _context.Output.HangUpAsync(CancellationToken.None);
-                        }
-                        return;
+                        case SttClosed closed:
+                            logger.LogWarning("Η αναγνώριση φωνής σταμάτησε: {Reason}", closed.Reason);
+                            if (!_lifetime.IsCancellationRequested)
+                            {
+                                _failed = true;
+                                await _context.Output.HangUpAsync(CancellationToken.None);
+                            }
+                            return;
+                    }
+                }
+                finally
+                {
+                    _control.Release();
                 }
             }
         }
@@ -202,19 +232,23 @@ public sealed class AssistantAgent(
 
         // Τι ακούστηκε: το μετράμε ΠΡΙΝ το "clear". Μετά το "clear" το Twilio επιστρέφει αμέσως
         // marks και για τον ήχο που σβήστηκε, και δεν θα ξεχωρίζαμε τι παίχτηκε πραγματικά.
-        var heard = string.Join(' ', _roundSentences
-            .Where(s => _playedMarks.ContainsKey(s.Mark))
-            .Select(s => s.Sentence));
-        var text = heard.Length > 0 ? heard + "…" : null;
+        var played = _roundSentences.Where(s => _playedMarks.ContainsKey(s.Mark)).ToList();
+        var cutOff = played.Count < _roundSentences.Count;
+        var heard = string.Join(' ', played.Select(s => s.Sentence));
+        var text = heard.Length > 0 ? heard + (cutOff ? "…" : "") : null;
 
         await _context.Output.ClearAsync();
         _pendingMarks.Clear();
 
         if (_conversation.EndsWithAssistant)
         {
-            // Ο γύρος είχε τελειώσει, έπαιζε ακόμα ο ήχος του.
-            _conversation.ReplaceLastAssistantText(text);
-            ReplaceTranscript(_roundTranscriptIndex, text);
+            // Ο γύρος είχε τελειώσει και έπαιζε ακόμα ο ήχος του. Αν πρόλαβε να ακουστεί
+            // ολόκληρος, το ιστορικό είναι ήδη σωστό.
+            if (cutOff)
+            {
+                _conversation.ReplaceLastAssistantText(text);
+                ReplaceTranscript(_roundTranscriptIndex, text);
+            }
         }
         else if (text is not null)
         {
@@ -241,6 +275,85 @@ public sealed class AssistantAgent(
         AddTranscript("Ασθενής", text);
         _conversation.AddUserText(text);
         StartTurn(RespondAsync);
+    }
+
+    // ---------- Σιωπή και όριο διάρκειας ----------
+
+    private async Task WatchdogLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(250, ct);
+                await _control.WaitAsync(ct);
+                try { await CheckTimersAsync(); }
+                finally { _control.Release(); }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Σφάλμα στα χρονόμετρα της κλήσης");
+        }
+    }
+
+    private async Task CheckTimersAsync()
+    {
+        if (_hangingUp) return;
+        var o = voice.Value;
+        var now = time.GetUtcNow();
+
+        if (now - _startedAt >= TimeSpan.FromMinutes(o.MaxCallMinutes))
+        {
+            logger.LogInformation("Η κλήση έφτασε το όριο των {Minutes} λεπτών", o.MaxCallMinutes);
+            await CloseLineAsync(MaxDurationGoodbye);
+            return;
+        }
+
+        // Σιωπή μετράει μόνο όταν η γραμματεία δεν σκέφτεται, δεν μιλάει και δεν περιμένει να απαντήσει.
+        if (IsBusy || GreetingPlaying || _pendingUserText.Length > 0)
+        {
+            _quietSince = now;
+            return;
+        }
+
+        var quiet = now - _quietSince;
+        if (!_askedIfStillThere && quiet >= TimeSpan.FromSeconds(o.SilencePromptSeconds))
+        {
+            _askedIfStillThere = true;
+            AddTranscript("Γραμματεία", StillTherePrompt);
+            StartTurn(ct => SpeakAsync(StillTherePrompt, ct, bypassGreetingWait: true));
+        }
+        else if (_askedIfStillThere && quiet >= TimeSpan.FromSeconds(o.SilenceHangUpSeconds))
+        {
+            logger.LogInformation("Σιωπή μετά το «Είστε ακόμα εκεί;», κλείνω");
+            await CloseLineAsync(SilenceGoodbye);
+        }
+    }
+
+    /// <summary>Σταματά ό,τι γίνεται, λέει μια τελευταία φράση και κλείνει τη γραμμή.</summary>
+    private async Task CloseLineAsync(string goodbye)
+    {
+        _hangingUp = true;
+        if (IsBusy && !GreetingPlaying)
+        {
+            await CancelTurnAsync();
+            await _context.Output.ClearAsync();
+            _pendingMarks.Clear();
+        }
+        else
+        {
+            await CancelTurnAsync();
+        }
+
+        AddTranscript("Γραμματεία", goodbye);
+        StartTurn(async ct =>
+        {
+            await SpeakAsync(goodbye, ct, bypassGreetingWait: true);
+            await WaitForPlaybackAsync(TimeSpan.FromSeconds(15), ct);
+            await _context.Output.HangUpAsync(ct);
+        });
     }
 
     // ---------- Απάντηση ----------
@@ -427,6 +540,7 @@ public sealed class AssistantAgent(
         try { await _greeting; } catch { }
         try { await _turn; } catch { }
         try { await _listenLoop; } catch { }
+        try { await _watchdog; } catch { }
         if (_stt is not null) await _stt.DisposeAsync();
         _turnCts?.Dispose();
         _lifetime.Dispose();
