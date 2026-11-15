@@ -97,11 +97,13 @@ public sealed class CallSessionRunner(
         }
         finally
         {
-            var outcome = failed ? CallOutcome.Failed : agent?.Outcome ?? CallOutcome.Abandoned;
+            if (agent is not null) await SafelyAsync(() => agent.DisposeAsync().AsTask(), "κλείσιμο agent");
 
-            if (agent is not null) await agent.DisposeAsync();
+            var outcome = failed ? CallOutcome.Failed : agent?.Outcome ?? CallOutcome.Abandoned;
+            var transcript = agent?.Transcript;
             if (call is not null)
-                await SafelyAsync(() => callLog.CompleteAsync(call.CallSid, outcome, ct: CancellationToken.None), "καταγραφή τέλους");
+                await SafelyAsync(() => callLog.CompleteAsync(call.CallSid, outcome, transcript: transcript, ct: CancellationToken.None),
+                    "καταγραφή τέλους");
 
             await stream.HangUpAsync(CancellationToken.None);
         }

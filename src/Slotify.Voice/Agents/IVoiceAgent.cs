@@ -9,8 +9,7 @@ public sealed record CallContext(Clinic Clinic, Call Call, IAudioOutput Output);
 
 /// <summary>
 /// Ο «εγκέφαλος» μιας κλήσης. Παίρνει τον ήχο του καλούντα και αποφασίζει τι θα του πει.
-/// Ένα instance ανά κλήση. Τώρα έχουμε Echo και Silent. Επόμενο βήμα ο κανονικός
-/// agent: Deepgram → Claude → φωνή.
+/// Ένα instance ανά κλήση: Assistant (η κανονική γραμματεία), Echo και Silent για δοκιμές.
 /// </summary>
 public interface IVoiceAgent : IAsyncDisposable
 {
@@ -27,12 +26,16 @@ public interface IVoiceAgent : IAsyncDisposable
 
     /// <summary>Τελικό αποτέλεσμα για το ιστορικό, όταν κλείσει η κλήση.</summary>
     CallOutcome Outcome => CallOutcome.Completed;
+
+    /// <summary>Η απομαγνητοφώνηση της κλήσης, αν υπάρχει.</summary>
+    string? Transcript => null;
 }
 
 public sealed class VoiceAgentFactory(IServiceProvider services, Microsoft.Extensions.Options.IOptions<VoiceOptions> options)
 {
     public IVoiceAgent Create() => options.Value.Mode switch
     {
+        AgentMode.Assistant => ActivatorUtilities.CreateInstance<AssistantAgent>(services),
         AgentMode.Echo => ActivatorUtilities.CreateInstance<EchoAgent>(services),
         AgentMode.Silent => ActivatorUtilities.CreateInstance<SilentAgent>(services),
         _ => throw new InvalidOperationException($"Άγνωστο Voice:Mode {options.Value.Mode}"),

@@ -4,6 +4,9 @@ namespace Slotify.Voice;
 
 public enum AgentMode
 {
+    /// <summary>Η κανονική γραμματεία: Deepgram → Claude → ElevenLabs.</summary>
+    Assistant,
+
     /// <summary>Παίζει πίσω ό,τι ακούει. Για την πρώτη δοκιμή ότι ο ήχος πάει και έρχεται.</summary>
     Echo,
 
