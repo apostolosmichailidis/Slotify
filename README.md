@@ -11,7 +11,9 @@ src/
   Slotify.Data    Postgres με Entity Framework Core.
   Slotify.Voice   ASP.NET Core API: webhook του Twilio + WebSocket για τον ζωντανό ήχο.
   Slotify.Admin   Διαχειριστικό (Blazor Server): ιατρεία, ωράριο, υπηρεσίες, αργίες, κλήσεις, στατιστικά.
-docker-compose.yml  Postgres + Voice + Admin
+docker-compose.yml       Postgres + Voice + Admin (τοπικά)
+docker-compose.prod.yml  Παραγωγή: + Caddy (HTTPS) + backup
+deploy/                  Caddyfile, script του backup
 ```
 
 ## Πώς κυλάει μια κλήση
@@ -182,15 +184,86 @@ dotnet run
 
 ## Βάση δεδομένων
 
-Όσο δεν υπάρχουν migrations, η εφαρμογή φτιάχνει τους πίνακες μόνη της (`EnsureCreated`).
-Πριν από την παραγωγή, φτιάξε το πρώτο migration:
+Η μορφή της βάσης αλλάζει μόνο με migrations (`src/Slotify.Data/Migrations`). Voice και Admin τα τρέχουν μόνα τους
+στην εκκίνηση. Αν ξεκινήσουν μαζί, δεν πειράζει: το EF κλειδώνει τη βάση όσο τρέχουν τα migrations.
+
+Αν αλλάξεις κάποιο μοντέλο στο Core:
 
 ```bash
-dotnet tool install --global dotnet-ef
-dotnet ef migrations add Initial -p src/Slotify.Data
+dotnet tool install --global dotnet-ef        # μία φορά
+dotnet ef migrations add ΠεριγραφήΑλλαγής -p src/Slotify.Data -o Migrations
 ```
 
-Από εκεί και πέρα η εφαρμογή τρέχει τα migrations μόνη της στην εκκίνηση.
+> Βάσεις από παλιότερη έκδοση (φτιαγμένες με `EnsureCreated`, χωρίς migrations) περνούν μόνες τους στα migrations
+> στην πρώτη εκκίνηση, χωρίς να χαθούν δεδομένα.
+> Σε ολοκαίνουργια βάση το log δείχνει μία φορά `fail ... __EFMigrationsHistory`. Είναι αναμενόμενο.
+
+## Ανέβασμα σε server
+
+Όλα τρέχουν με Docker Compose. Το Caddy βγάζει μόνο του πιστοποιητικά HTTPS, και μόνο αυτό ανοίγει θύρες (80/443).
+Η βάση, το Voice και το Admin δεν φαίνονται απ' έξω.
+
+```
+Twilio ──https/wss──▶ voice.domain.gr ─┐
+                                       ├─ Caddy ─▶ voice / admin ─▶ Postgres ◀─ backup (κάθε μέρα)
+εσύ ────────https───▶ admin.domain.gr ─┘
+```
+
+### Τι κάνεις εσύ (μία φορά)
+
+1. **Server.** Ένα VPS με Ubuntu 24.04 (π.χ. Hetzner CX22, 2 vCPU / 4 GB, σε Ευρώπη). Μπαίνεις με SSH key.
+2. **Domain.** Στο DNS του domain σου βάζεις δύο εγγραφές `A` προς την IP του server:
+   `voice.domain.gr` και `admin.domain.gr`. Περίμενε να «πιάσουν» (`ping voice.domain.gr` δείχνει την IP).
+3. **Docker και firewall** στον server:
+   ```bash
+   curl -fsSL https://get.docker.com | sh
+   ufw allow OpenSSH && ufw allow 80 && ufw allow 443 && ufw enable
+   ```
+4. **Κώδικας και ρυθμίσεις:**
+   ```bash
+   git clone https://github.com/apostolosmichailidis/Slotify.git && cd Slotify
+   cp .env.example .env && nano .env
+   ```
+   Συμπλήρωσε: `VOICE_DOMAIN`, `ADMIN_DOMAIN`, `ADMIN_PASSWORD`, `POSTGRES_PASSWORD` (νέο, δυνατό),
+   `STREAM_SECRET` (`openssl rand -base64 32`), `TWILIO_AUTH_TOKEN`, `VOICE_MODE=Assistant` και τα κλειδιά
+   Deepgram / ElevenLabs / Anthropic / Google. Το `PUBLIC_BASE_URL` δεν χρειάζεται εδώ, βγαίνει από το `VOICE_DOMAIN`.
+5. **Εκκίνηση:**
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f caddy voice admin
+   ```
+6. **Διαχειριστικό:** άνοιξε `https://admin.domain.gr` και φτιάξε το ιατρείο με τον αριθμό Twilio, το ωράριο και τις υπηρεσίες.
+   Στην παραγωγή δεν φτιάχνεται δοκιμαστικό ιατρείο.
+7. **Twilio Console:** στον αριθμό, «A call comes in» → Webhook `https://voice.domain.gr/twilio/voice`, HTTP POST.
+8. Πάρε τηλέφωνο.
+
+### Ενημέρωση σε νέα έκδοση
+
+```bash
+git pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+Τα migrations τρέχουν μόνα τους. Όσο ξαναξεκινά το Voice, όποια κλήση είναι σε εξέλιξη κόβεται, οπότε κάν' το εκτός ωραρίου.
+
+### Backup
+
+Το container `backup` κρατάει ένα αντίγραφο της βάσης την ημέρα στον φάκελο `backups/` του server
+(τελευταίες 14 μέρες, αλλάζει με `BACKUP_KEEP_DAYS`). **Ο φάκελος είναι στον ίδιο server**: αν χαθεί ο server,
+χάνονται κι αυτά. Κατέβαζέ τα πού και πού στον υπολογιστή σου, ή ενεργοποίησε τα backups του VPS
+(στη Hetzner κοστίζουν 20% της τιμής του server).
+
+```bash
+scp root@server:Slotify/backups/slotify-*.dump .        # κατέβασμα
+```
+
+Επαναφορά (σβήνει ό,τι υπάρχει στη βάση):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml stop voice admin
+docker compose exec -T db pg_restore -U slotify -d slotify --clean --if-exists < backups/slotify-ΗΜΕΡΟΜΗΝΙΑ.dump
+docker compose -f docker-compose.yml -f docker-compose.prod.yml start voice admin
+```
 
 ## Ασφάλεια
 

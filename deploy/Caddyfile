@@ -1,0 +1,17 @@
+# Caddy βγάζει και ανανεώνει μόνο του πιστοποιητικά HTTPS (Let's Encrypt).
+# Τα domains έρχονται από το .env: VOICE_DOMAIN, ADMIN_DOMAIN.
+
+{$VOICE_DOMAIN} {
+	# Webhook του Twilio και WebSocket του ήχου. Το Caddy περνάει τα WebSocket χωρίς άλλη ρύθμιση.
+	reverse_proxy voice:8080
+}
+
+{$ADMIN_DOMAIN} {
+	reverse_proxy admin:8080
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+	}
+}
