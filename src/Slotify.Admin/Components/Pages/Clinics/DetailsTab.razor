@@ -1,0 +1,143 @@
+@inject ClinicEditor Editor
+
+<EditForm Model="form" OnValidSubmit="SaveAsync" FormName="clinic-details" class="card form">
+    <DataAnnotationsValidator />
+
+    <h2>Βασικά</h2>
+    <div class="grid-2">
+        <label class="field">
+            <span>Όνομα</span>
+            <InputText @bind-Value="form.Name" placeholder="Οδοντιατρείο Παπαδόπουλου" />
+            <small>Έτσι το λέει η γραμματεία στον χαιρετισμό.</small>
+            <ValidationMessage For="() => form.Name" />
+        </label>
+        <label class="field">
+            <span>Αριθμός Twilio</span>
+            <InputText @bind-Value="form.PhoneNumber" placeholder="+302310123456" class="mono" />
+            <small>Ο αριθμός που καλούν οι ασθενείς. Από αυτόν βρίσκουμε το ιατρείο.</small>
+            <ValidationMessage For="() => form.PhoneNumber" />
+        </label>
+    </div>
+    <label class="check">
+        <InputCheckbox @bind-Value="form.IsActive" />
+        <span>Ενεργό: η γραμματεία σηκώνει τις κλήσεις του</span>
+    </label>
+
+    <h2>Γραμματεία</h2>
+    <label class="field">
+        <span>Χαιρετισμός</span>
+        <InputTextArea @bind-Value="form.Greeting" rows="2" placeholder="@DefaultGreeting" />
+        <small>
+            Αν μείνει κενό, λέει: «@DefaultGreeting».
+            Πρέπει να λέει ότι ο καλών μιλάει με ψηφιακή βοηθό (Κανονισμός AI της ΕΕ).
+        </small>
+        <ValidationMessage For="() => form.Greeting" />
+    </label>
+    <label class="field">
+        <span>Πληροφορίες ιατρείου</span>
+        <InputTextArea @bind-Value="form.KnowledgeBase" rows="8"
+                       placeholder="Διεύθυνση, όροφος, πάρκινγκ, τιμές, ασφαλιστικά ταμεία, τι να φέρει ο ασθενής…" />
+        <small>Ό,τι γράψεις εδώ μπορεί να το πει η γραμματεία αν ρωτήσουν. Ό,τι λείπει, απαντά ότι θα ενημερώσει το ιατρείο.</small>
+    </label>
+
+    <h2>Ραντεβού</h2>
+    <label class="field">
+        <span>Google Calendar ID</span>
+        <InputText @bind-Value="form.GoogleCalendarId" placeholder="π.χ. γιατρός@gmail.com" class="mono" />
+        <small>
+            Αν μείνει κενό, η γραμματεία δεν κλείνει ραντεβού: παίρνει τα στοιχεία και λέει ότι θα καλέσει το ιατρείο.
+            Το ημερολόγιο πρέπει να έχει κοινή χρήση με το service account, με δικαίωμα «Αλλαγές σε εκδηλώσεις».
+        </small>
+        <ValidationMessage For="() => form.GoogleCalendarId" />
+    </label>
+    <div class="grid-3">
+        <label class="field">
+            <span>Ελάχιστη προειδοποίηση (λεπτά)</span>
+            <InputNumber @bind-Value="form.MinNoticeMinutes" min="0" step="15" />
+            <small>Δεν κλείνει ραντεβού πιο κοντά από αυτό.</small>
+            <ValidationMessage For="() => form.MinNoticeMinutes" />
+        </label>
+        <label class="field">
+            <span>Ραντεβού ανά (λεπτά)</span>
+            <InputNumber @bind-Value="form.SlotStepMinutes" min="5" step="5" />
+            <small>15 → 10:00, 10:15, 10:30…</small>
+            <ValidationMessage For="() => form.SlotStepMinutes" />
+        </label>
+        <label class="field">
+            <span>Μέρες μπροστά</span>
+            <InputNumber @bind-Value="form.BookingHorizonDays" min="1" />
+            <small>Πόσο μακριά ψάχνει ελεύθερες ώρες.</small>
+            <ValidationMessage For="() => form.BookingHorizonDays" />
+        </label>
+    </div>
+    <label class="field narrow">
+        <span>Ζώνη ώρας</span>
+        <InputSelect @bind-Value="form.TimeZoneId">
+            <option value="Europe/Athens">Ελλάδα (Europe/Athens)</option>
+            <option value="Europe/Nicosia">Κύπρος (Europe/Nicosia)</option>
+        </InputSelect>
+    </label>
+
+    @if (error is not null)
+    {
+        <div class="alert alert-bad">@error</div>
+    }
+
+    <div class="form-actions">
+        <button class="btn btn-primary" type="submit" disabled="@saving">@(Clinic is null ? "Δημιουργία" : "Αποθήκευση")</button>
+        @if (savedAt is not null)
+        {
+            <span class="saved">✓ Αποθηκεύτηκε</span>
+        }
+    </div>
+</EditForm>
+
+@code {
+    /// <summary>null για νέο ιατρείο.</summary>
+    [Parameter]
+    public Clinic? Clinic { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> Saved { get; set; }
+
+    private ClinicForm form = new();
+    private Guid? loadedId;
+    private bool initialized;
+    private bool saving;
+    private string? error;
+    private DateTime? savedAt;
+
+    private string DefaultGreeting =>
+        new Clinic { Name = string.IsNullOrWhiteSpace(form.Name) ? "…" : form.Name, PhoneNumber = "" }.EffectiveGreeting;
+
+    protected override void OnParametersSet()
+    {
+        // Η φόρμα φτιάχνεται μία φορά ανά ιατρείο, για να μη χάνονται όσα γράφεις όταν ξαναφορτώνει η σελίδα.
+        if (initialized && Clinic?.Id == loadedId) return;
+        form = Clinic is null ? new ClinicForm() : ClinicForm.From(Clinic);
+        loadedId = Clinic?.Id;
+        initialized = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        saving = true;
+        error = null;
+        savedAt = null;
+        try
+        {
+            var result = await Editor.SaveDetailsAsync(Clinic?.Id, form);
+            if (!result.Ok)
+            {
+                error = result.Error;
+                return;
+            }
+            savedAt = DateTime.UtcNow;
+            await Saved.InvokeAsync(result.Id!.Value);
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+}

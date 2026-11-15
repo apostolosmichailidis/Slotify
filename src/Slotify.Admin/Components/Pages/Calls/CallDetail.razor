@@ -1,0 +1,90 @@
+@page "/calls/{Id:guid}"
+@inject DashboardQueries Queries
+
+<PageTitle>Κλήση · Slotify</PageTitle>
+
+<p class="crumbs"><a href="calls">Κλήσεις</a> /</p>
+
+@if (notFound)
+{
+    <p class="empty">Η κλήση δεν βρέθηκε.</p>
+}
+else if (call is null)
+{
+    <p class="muted">Φόρτωση…</p>
+}
+else
+{
+    var r = call.Row;
+    <header class="page-head">
+        <div>
+            <h1>@Display.DateTime(r.StartedAt)</h1>
+            <p class="muted"><a href="clinics/@r.ClinicId">@r.ClinicName</a></p>
+        </div>
+        <OutcomeBadge Outcome="r.Outcome" />
+    </header>
+
+    <section class="card">
+        <dl class="facts">
+            <div><dt>Από</dt><dd class="mono">@(r.FromNumber ?? "απόκρυψη")</dd></div>
+            <div><dt>Διάρκεια</dt><dd>@Display.Duration(r.DurationSeconds)</dd></div>
+            <div><dt>Τέλος</dt><dd>@(r.EndedAt is null ? "—" : Display.Time(r.EndedAt.Value))</dd></div>
+            <div><dt>Twilio CallSid</dt><dd class="mono small">@call.CallSid</dd></div>
+        </dl>
+        @if (!string.IsNullOrWhiteSpace(r.Summary))
+        {
+            <h2>Περίληψη</h2>
+            <p class="summary">@r.Summary</p>
+        }
+    </section>
+
+    <section class="card">
+        <h2>Απομαγνητοφώνηση</h2>
+        @if (lines.Count == 0)
+        {
+            <p class="empty">Δεν υπάρχει απομαγνητοφώνηση (π.χ. κλήση σε λειτουργία Echo ή κόπηκε στην αρχή).</p>
+        }
+        else
+        {
+            <div class="transcript">
+                @foreach (var (who, text) in lines)
+                {
+                    <div class="bubble @(who == "Ασθενής" ? "caller" : who == "Γραμματεία" ? "agent" : "other")">
+                        <span class="who">@who</span>
+                        <span>@text</span>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+}
+
+@code {
+    [Parameter]
+    public Guid Id { get; set; }
+
+    private CallInfo? call;
+    private bool notFound;
+    private List<(string Who, string Text)> lines = [];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        call = await Queries.GetAsync(Id);
+        notFound = call is null;
+        lines = Parse(call?.Transcript);
+    }
+
+    /// <summary>Η απομαγνητοφώνηση γράφεται «Ομιλητής: κείμενο», μία γραμμή ανά φράση.</summary>
+    private static List<(string, string)> Parse(string? transcript)
+    {
+        if (string.IsNullOrWhiteSpace(transcript)) return [];
+        return transcript
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line =>
+            {
+                var i = line.IndexOf(": ", StringComparison.Ordinal);
+                return i is > 0 and < 20 ? (line[..i], line[(i + 2)..]) : ("", line);
+            })
+            .ToList();
+    }
+}

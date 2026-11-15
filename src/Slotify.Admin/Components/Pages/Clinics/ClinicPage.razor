@@ -1,0 +1,93 @@
+@page "/clinics/new"
+@page "/clinics/{Id:guid}"
+@inject ClinicEditor Editor
+@inject NavigationManager Nav
+
+<PageTitle>@(clinic?.Name ?? "Νέο ιατρείο") · Slotify</PageTitle>
+
+<p class="crumbs"><a href="clinics">Ιατρεία</a> /</p>
+
+@if (Id is null)
+{
+    <header class="page-head"><h1>Νέο ιατρείο</h1></header>
+    <DetailsTab Clinic="null" Saved="OnCreated" />
+}
+else if (notFound)
+{
+    <p class="empty">Το ιατρείο δεν βρέθηκε.</p>
+}
+else if (clinic is null)
+{
+    <p class="muted">Φόρτωση…</p>
+}
+else
+{
+    <header class="page-head">
+        <div>
+            <h1>@clinic.Name</h1>
+            <p class="muted mono">@clinic.PhoneNumber</p>
+        </div>
+        @if (!clinic.IsActive)
+        {
+            <span class="badge badge-muted">Ανενεργό: η γραμματεία δεν σηκώνει</span>
+        }
+    </header>
+
+    <nav class="tabs">
+        @foreach (var (key, label) in Tabs)
+        {
+            <a class="@(CurrentTab == key ? "active" : "")" href="clinics/@Id?tab=@key">@label</a>
+        }
+        <a href="calls?clinic=@Id">Κλήσεις →</a>
+    </nav>
+
+    @switch (CurrentTab)
+    {
+        case "hours":
+            <HoursTab Clinic="clinic" Saved="ReloadAsync" />
+            break;
+        case "services":
+            <ServicesTab Clinic="clinic" Saved="ReloadAsync" />
+            break;
+        case "closures":
+            <ClosuresTab Clinic="clinic" Saved="ReloadAsync" />
+            break;
+        default:
+            <DetailsTab Clinic="clinic" Saved="_ => ReloadAsync()" />
+            break;
+    }
+}
+
+@code {
+    private static readonly (string Key, string Label)[] Tabs =
+    [
+        ("details", "Στοιχεία"),
+        ("hours", "Ωράριο"),
+        ("services", "Υπηρεσίες"),
+        ("closures", "Κλειστές μέρες"),
+    ];
+
+    [Parameter]
+    public Guid? Id { get; set; }
+
+    [SupplyParameterFromQuery]
+    public string? Tab { get; set; }
+
+    private string CurrentTab => Tab ?? "details";
+
+    private Clinic? clinic;
+    private bool notFound;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Id is not null && clinic?.Id != Id) await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        clinic = await Editor.LoadAsync(Id!.Value);
+        notFound = clinic is null;
+    }
+
+    private void OnCreated(Guid id) => Nav.NavigateTo($"clinics/{id}?tab=hours");
+}

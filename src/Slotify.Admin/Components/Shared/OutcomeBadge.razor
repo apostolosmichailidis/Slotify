@@ -1,0 +1,6 @@
+<span class="badge badge-@Display.OutcomeTone(Outcome)">@Display.Outcome(Outcome)</span>
+
+@code {
+    [Parameter, EditorRequired]
+    public CallOutcome Outcome { get; set; }
+}

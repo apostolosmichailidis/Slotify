@@ -1,0 +1,143 @@
+@inject ClinicEditor Editor
+@inject TimeProvider Time
+
+<section class="card form">
+    <h2>Κλείσιμο ιατρείου</h2>
+    <p class="muted">Άδεια, συνέδριο, αργία. Αυτές τις μέρες η γραμματεία δεν κλείνει ραντεβού και λέει ότι το ιατρείο είναι κλειστό.</p>
+
+    <div class="grid-closure">
+        <label class="field">
+            <span>Από</span>
+            <input type="date" @bind="from" @bind:after="SyncTo" />
+        </label>
+        <label class="field">
+            <span>Έως (και αυτή)</span>
+            <input type="date" @bind="to" min="@from.ToString("yyyy-MM-dd")" />
+        </label>
+        <label class="field">
+            <span>Αιτία (προαιρετικά)</span>
+            <input @bind="reason" placeholder="π.χ. Άδεια" maxlength="200" />
+        </label>
+    </div>
+
+    @if (error is not null)
+    {
+        <div class="alert alert-bad">@error</div>
+    }
+    @if (message is not null)
+    {
+        <div class="alert alert-good">@message</div>
+    }
+
+    <div class="form-actions">
+        <button class="btn btn-primary" type="button" @onclick="AddAsync" disabled="@saving">Προσθήκη</button>
+        <span class="spacer"></span>
+        @foreach (var year in HolidayYears)
+        {
+            <button class="btn" type="button" @onclick="() => AddHolidaysAsync(year)" disabled="@saving">Αργίες @year</button>
+        }
+    </div>
+</section>
+
+<section class="card">
+    <h2>Επόμενες κλειστές μέρες</h2>
+    @if (Clinic.Closures.Count == 0)
+    {
+        <p class="empty">Καμία. Το ιατρείο δουλεύει κανονικά με το ωράριο.</p>
+    }
+    else
+    {
+        <ul class="closures">
+            @foreach (var c in Clinic.Closures)
+            {
+                <li>
+                    <span class="closure-date">@Display.Date(c.Date)</span>
+                    <span class="muted">@c.Reason</span>
+                    <button class="icon-btn" type="button" title="Αφαίρεση" @onclick="() => DeleteAsync(c)">✕</button>
+                </li>
+            }
+        </ul>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public Clinic Clinic { get; set; } = default!;
+
+    [Parameter]
+    public EventCallback Saved { get; set; }
+
+    private DateOnly from;
+    private DateOnly to;
+    private string? reason;
+    private bool saving;
+    private string? error;
+    private string? message;
+
+    private int[] HolidayYears
+    {
+        get
+        {
+            var today = Display.TodayInAthens(Time);
+            return [today.Year, today.Year + 1];
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        from = to = Display.TodayInAthens(Time).AddDays(1);
+    }
+
+    private void SyncTo()
+    {
+        if (to < from) to = from;
+    }
+
+    private async Task AddAsync()
+    {
+        await RunAsync(async () =>
+        {
+            var result = await Editor.AddClosuresAsync(Clinic.Id, from, to, reason);
+            if (!result.Ok)
+            {
+                error = result.Error;
+                return;
+            }
+            var days = to.DayNumber - from.DayNumber + 1;
+            message = days == 1 ? "Η μέρα έκλεισε." : $"Έκλεισαν {days} μέρες.";
+            reason = null;
+        });
+    }
+
+    private async Task AddHolidaysAsync(int year)
+    {
+        await RunAsync(async () =>
+        {
+            var added = await Editor.AddGreekHolidaysAsync(Clinic.Id, year);
+            message = added == 0
+                ? $"Οι αργίες του {year} υπάρχουν ήδη."
+                : $"Προστέθηκαν {added} αργίες του {year}. Σβήσε όσες δουλεύει το ιατρείο.";
+        });
+    }
+
+    private async Task DeleteAsync(ClinicClosure c)
+    {
+        await RunAsync(() => Editor.DeleteClosureAsync(Clinic.Id, c.Id));
+    }
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        saving = true;
+        error = null;
+        message = null;
+        try
+        {
+            await action();
+            await Saved.InvokeAsync();
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+}

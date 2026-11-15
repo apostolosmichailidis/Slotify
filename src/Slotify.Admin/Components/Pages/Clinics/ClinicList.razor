@@ -1,0 +1,78 @@
+@page "/clinics"
+@inject ClinicEditor Editor
+
+<PageTitle>Ιατρεία · Slotify</PageTitle>
+
+<header class="page-head">
+    <h1>Ιατρεία</h1>
+    <a class="btn btn-primary" href="clinics/new">+ Νέο ιατρείο</a>
+</header>
+
+@if (rows is null)
+{
+    <p class="muted">Φόρτωση…</p>
+}
+else if (rows.Count == 0)
+{
+    <div class="card empty">
+        Δεν υπάρχει κανένα ιατρείο ακόμα. <a href="clinics/new">Πρόσθεσε το πρώτο.</a>
+    </div>
+}
+else
+{
+    <div class="card table-wrap">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Όνομα</th>
+                    <th>Αριθμός Twilio</th>
+                    <th>Ημερολόγιο</th>
+                    <th class="num">Υπηρεσίες</th>
+                    <th class="num">Κλήσεις μήνα</th>
+                    <th>Κατάσταση</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var c in rows)
+                {
+                    <tr>
+                        <td><a href="clinics/@c.Id"><strong>@c.Name</strong></a></td>
+                        <td class="mono nowrap">@c.PhoneNumber</td>
+                        <td>
+                            @if (c.HasCalendar)
+                            {
+                                <span class="badge badge-good">Google</span>
+                            }
+                            else
+                            {
+                                <span class="badge badge-muted">Μόνο αιτήματα</span>
+                            }
+                        </td>
+                        <td class="num">@c.ServiceCount</td>
+                        <td class="num"><a href="calls?clinic=@c.Id">@c.CallsThisMonth</a></td>
+                        <td>
+                            @if (!c.IsActive)
+                            {
+                                <span class="badge badge-muted">Ανενεργό</span>
+                            }
+                            else if (!c.HasHours)
+                            {
+                                <span class="badge badge-bad">Χωρίς ωράριο</span>
+                            }
+                            else
+                            {
+                                <span class="badge badge-good">Ενεργό</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private List<ClinicRow>? rows;
+
+    protected override async Task OnInitializedAsync() => rows = await Editor.ListAsync();
+}

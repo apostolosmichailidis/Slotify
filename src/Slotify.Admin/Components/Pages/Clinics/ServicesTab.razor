@@ -1,0 +1,160 @@
+@inject ClinicEditor Editor
+
+<section class="card">
+    <h2>Υπηρεσίες</h2>
+    <p class="muted">
+        Η διάρκεια ορίζει πόσο χώρο ψάχνει η γραμματεία στο ημερολόγιο. Η περιγραφή τη βοηθά να καταλάβει
+        ποια υπηρεσία ταιριάζει σε αυτό που λέει ο ασθενής. Οι ανενεργές δεν προτείνονται.
+    </p>
+
+    @if (Clinic.Services.Count == 0)
+    {
+        <p class="empty">Καμία υπηρεσία ακόμα.</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Όνομα</th>
+                        <th class="num">Διάρκεια</th>
+                        <th class="wide">Περιγραφή</th>
+                        <th>Κατάσταση</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var s in Clinic.Services)
+                    {
+                        <tr class="@(s.IsActive ? "" : "dim")">
+                            <td><strong>@s.Name</strong></td>
+                            <td class="num nowrap">@s.DurationMinutes′</td>
+                            <td class="wide">@s.Description</td>
+                            <td>
+                                @if (s.IsActive)
+                                {
+                                    <span class="badge badge-good">Ενεργή</span>
+                                }
+                                else
+                                {
+                                    <span class="badge badge-muted">Ανενεργή</span>
+                                }
+                            </td>
+                            <td class="actions">
+                                <button class="link-btn" type="button" @onclick="() => Edit(s)">Αλλαγή</button>
+                                @if (confirmDelete == s.Id)
+                                {
+                                    <button class="link-btn danger" type="button" @onclick="() => DeleteAsync(s)">Σίγουρα;</button>
+                                }
+                                else
+                                {
+                                    <button class="link-btn danger" type="button" @onclick="() => confirmDelete = s.Id">Διαγραφή</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+<section class="card form">
+    <h2>@(editing.Id == Guid.Empty ? "Νέα υπηρεσία" : $"Αλλαγή: {originalName}")</h2>
+    <div class="grid-service">
+        <label class="field">
+            <span>Όνομα</span>
+            <input @bind="editing.Name" placeholder="π.χ. Καθαρισμός" maxlength="200" />
+        </label>
+        <label class="field">
+            <span>Διάρκεια (λεπτά)</span>
+            <input type="number" min="5" max="480" step="5" @bind="editing.DurationMinutes" />
+        </label>
+    </div>
+    <label class="field">
+        <span>Περιγραφή (προαιρετικά)</span>
+        <input @bind="editing.Description" placeholder="π.χ. Αφαίρεση πέτρας, μία φορά τον χρόνο" maxlength="1000" />
+    </label>
+    <label class="check">
+        <input type="checkbox" @bind="editing.IsActive" />
+        <span>Ενεργή</span>
+    </label>
+
+    @if (error is not null)
+    {
+        <div class="alert alert-bad">@error</div>
+    }
+
+    <div class="form-actions">
+        <button class="btn btn-primary" type="button" @onclick="SaveAsync" disabled="@saving">
+            @(editing.Id == Guid.Empty ? "Προσθήκη" : "Αποθήκευση")
+        </button>
+        @if (editing.Id != Guid.Empty)
+        {
+            <button class="btn" type="button" @onclick="Reset">Ακύρωση</button>
+        }
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public Clinic Clinic { get; set; } = default!;
+
+    [Parameter]
+    public EventCallback Saved { get; set; }
+
+    private ClinicService editing = NewService();
+    private string? originalName;
+    private Guid? confirmDelete;
+    private bool saving;
+    private string? error;
+
+    private static ClinicService NewService() => new() { Id = Guid.Empty, Name = "", DurationMinutes = 30 };
+
+    private void Edit(ClinicService s)
+    {
+        error = null;
+        confirmDelete = null;
+        originalName = s.Name;
+        editing = new ClinicService
+        {
+            Id = s.Id, Name = s.Name, DurationMinutes = s.DurationMinutes, Description = s.Description, IsActive = s.IsActive,
+        };
+    }
+
+    private void Reset()
+    {
+        error = null;
+        editing = NewService();
+    }
+
+    private async Task SaveAsync()
+    {
+        saving = true;
+        error = null;
+        try
+        {
+            var result = await Editor.SaveServiceAsync(Clinic.Id, editing);
+            if (!result.Ok)
+            {
+                error = result.Error;
+                return;
+            }
+            Reset();
+            await Saved.InvokeAsync();
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task DeleteAsync(ClinicService s)
+    {
+        confirmDelete = null;
+        await Editor.DeleteServiceAsync(Clinic.Id, s.Id);
+        if (editing.Id == s.Id) Reset();
+        await Saved.InvokeAsync();
+    }
+}
