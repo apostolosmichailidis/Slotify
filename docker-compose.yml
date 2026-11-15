@@ -1,0 +1,58 @@
+# Τοπικά:
+#   docker compose up -d db          → μόνο η Postgres (και τρέχεις το Voice από το IDE)
+#   docker compose up -d --build     → όλα μαζί
+# Τα μυστικά μπαίνουν στο αρχείο .env (δες .env.example).
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: slotify
+      POSTGRES_USER: slotify
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-slotify}
+      TZ: Europe/Athens
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slotify -d slotify"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  voice:
+    build:
+      context: .
+      dockerfile: src/Slotify.Voice/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      ConnectionStrings__Slotify: Host=db;Port=5432;Database=slotify;Username=slotify;Password=${POSTGRES_PASSWORD:-slotify}
+      Voice__PublicBaseUrl: ${PUBLIC_BASE_URL}
+      Voice__Mode: ${VOICE_MODE:-Echo}
+      Voice__StreamSecret: ${STREAM_SECRET}
+      Voice__DemoClinicPhoneNumber: ${DEMO_CLINIC_PHONE_NUMBER:-}
+      Twilio__AuthToken: ${TWILIO_AUTH_TOKEN}
+    ports:
+      - "8000:8080"
+
+  admin:
+    build:
+      context: .
+      dockerfile: src/Slotify.Admin/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Slotify: Host=db;Port=5432;Database=slotify;Username=slotify;Password=${POSTGRES_PASSWORD:-slotify}
+    ports:
+      - "8001:8080"
+
+volumes:
+  pgdata:

@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Slotify.Admin/Slotify.Admin.csproj" />
+    <Project Path="src/Slotify.Core/Slotify.Core.csproj" />
+    <Project Path="src/Slotify.Data/Slotify.Data.csproj" />
+    <Project Path="src/Slotify.Voice/Slotify.Voice.csproj" />
+  </Folder>
+</Solution>
