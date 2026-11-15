@@ -29,6 +29,9 @@ public interface IVoiceAgent : IAsyncDisposable
 
     /// <summary>Η απομαγνητοφώνηση της κλήσης, αν υπάρχει.</summary>
     string? Transcript => null;
+
+    /// <summary>Σύντομη περίληψη για τον γιατρό (π.χ. το ραντεβού που κλείστηκε).</summary>
+    string? Summary => null;
 }
 
 public sealed class VoiceAgentFactory(IServiceProvider services, Microsoft.Extensions.Options.IOptions<VoiceOptions> options)

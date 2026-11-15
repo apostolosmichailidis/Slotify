@@ -1,28 +1,23 @@
 using System.Text;
 using Slotify.Core.Clinics;
+using Slotify.Voice.Scheduling;
 
 namespace Slotify.Voice.Llm;
 
 /// <summary>Φτιάχνει τις οδηγίες (system prompt) της γραμματείας από τα στοιχεία του ιατρείου.</summary>
 public sealed class PromptBuilder(TimeProvider time)
 {
-    private static readonly string[] Days =
-        ["Κυριακή", "Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη", "Παρασκευή", "Σάββατο"];
-
-    private static readonly string[] Months =
-        ["Ιανουαρίου", "Φεβρουαρίου", "Μαρτίου", "Απριλίου", "Μαΐου", "Ιουνίου",
-         "Ιουλίου", "Αυγούστου", "Σεπτεμβρίου", "Οκτωβρίου", "Νοεμβρίου", "Δεκεμβρίου"];
-
-    public string Build(Clinic clinic, string greetingAlreadySpoken)
+    public string Build(Clinic clinic, string greetingAlreadySpoken, string? callerNumber, bool calendarEnabled)
     {
-        var now = TimeZoneInfo.ConvertTime(time.GetUtcNow(), clinic.TimeZone);
+        var now = TimeZoneInfo.ConvertTime(time.GetUtcNow(), clinic.TimeZone).DateTime;
         var sb = new StringBuilder();
 
         sb.AppendLine($"""
             Είσαι η τηλεφωνική γραμματεία του ιατρείου «{clinic.Name}». Είσαι ψηφιακή βοηθός (AI) και, αν σε ρωτήσουν, το λες ευθέως.
             Μιλάς στο τηλέφωνο με ασθενείς, στα ελληνικά, ευγενικά και ζεστά, όπως μια καλή γραμματέας.
 
-            Τώρα είναι {Days[(int)now.DayOfWeek]} {now.Day} {Months[now.Month - 1]} {now.Year}, ώρα {now:HH:mm}.
+            Τώρα είναι {GreekText.Date(now)} {now.Year}, ώρα {now:HH:mm} (σήμερα = {now:yyyy-MM-dd}).
+            Ο αριθμός από τον οποίο καλεί ο ασθενής: {(string.IsNullOrWhiteSpace(callerNumber) ? "άγνωστος" : callerNumber)}.
 
             Μόλις σήκωσες το τηλέφωνο και είπες: «{greetingAlreadySpoken}»
 
@@ -51,14 +46,14 @@ public sealed class PromptBuilder(TimeProvider time)
             var hours = byDay.TryGetValue(day, out var list)
                 ? string.Join(" και ", list.Select(h => $"{h.Opens:HH\\:mm}–{h.Closes:HH\\:mm}"))
                 : "κλειστά";
-            sb.AppendLine($"- {Days[(int)day]}: {hours}");
+            sb.AppendLine($"- {GreekText.Days[(int)day]}: {hours}");
         }
 
         if (clinic.Closures.Count > 0)
         {
             sb.AppendLine();
             sb.AppendLine("Κλειστά επίσης: " + string.Join(", ",
-                clinic.Closures.OrderBy(c => c.Date).Select(c => $"{c.Date.Day} {Months[c.Date.Month - 1]}" +
+                clinic.Closures.OrderBy(c => c.Date).Select(c => $"{c.Date.Day} {GreekText.MonthsGenitive[c.Date.Month - 1]}" +
                     (string.IsNullOrWhiteSpace(c.Reason) ? "" : $" ({c.Reason})"))));
         }
 
@@ -74,14 +69,27 @@ public sealed class PromptBuilder(TimeProvider time)
             }
         }
 
-        // Μέχρι να συνδεθεί το ημερολόγιο (επόμενο βήμα), η γραμματεία κρατάει αίτημα.
-        sb.AppendLine("""
-
-            ## Ραντεβού
-            Προς το παρόν δεν βλέπεις το ημερολόγιο. Όταν κάποιος θέλει ραντεβού, ρωτάς για ποια υπηρεσία,
-            ποια μέρα και ώρα τον βολεύει μέσα στο ωράριο, και το ονοματεπώνυμό του.
-            Μετά λες ότι το ιατρείο θα τον καλέσει για να επιβεβαιώσει την ώρα.
-            """);
+        sb.AppendLine();
+        sb.AppendLine(calendarEnabled
+            ? """
+              ## Ραντεβού
+              Βλέπεις το ημερολόγιο του ιατρείου με τα εργαλεία find_available_slots και book_appointment.
+              1. Μάθε ποια υπηρεσία θέλει και πότε τον βολεύει περίπου (μέρα, πρωί ή απόγευμα).
+              2. Πριν ψάξεις, πες μια πολύ σύντομη φράση όπως «Μισό λεπτό να δω.» και μετά κάλεσε το find_available_slots.
+                 Οι μέρες που λέει ο ασθενής («αύριο», «την Πέμπτη», «την άλλη εβδομάδα») υπολογίζονται από τη σημερινή ημερομηνία.
+              3. Πρότεινε 2 ή 3 από τις ώρες που επέστρεψε. Ποτέ ώρα που δεν επέστρεψε το εργαλείο.
+              4. Πάρε ονοματεπώνυμο. Το τηλέφωνο επικοινωνίας είναι ο αριθμός από τον οποίο καλεί, εκτός αν πει άλλο.
+              5. Επιβεβαίωσε σε μία πρόταση υπηρεσία, μέρα, ώρα και όνομα, και περίμενε να πει «ναι».
+              6. Μόνο τότε κάλεσε το book_appointment, με το start ακριβώς όπως το έδωσε το find_available_slots.
+              7. Αν το εργαλείο πει ότι η ώρα δεν είναι πια διαθέσιμη, ζήτα συγγνώμη και πρότεινε από τις εναλλακτικές.
+              Για ακύρωση ή αλλαγή υπάρχοντος ραντεβού: πάρε όνομα και ποιο ραντεβού, και πες ότι θα τον καλέσει το ιατρείο.
+              """
+            : """
+              ## Ραντεβού
+              Δεν βλέπεις το ημερολόγιο. Όταν κάποιος θέλει ραντεβού, ρωτάς για ποια υπηρεσία,
+              ποια μέρα και ώρα τον βολεύει μέσα στο ωράριο, και το ονοματεπώνυμό του.
+              Μετά λες ότι το ιατρείο θα τον καλέσει για να επιβεβαιώσει την ώρα.
+              """);
 
         if (!string.IsNullOrWhiteSpace(clinic.KnowledgeBase))
         {

@@ -42,6 +42,8 @@ services:
       ElevenLabs__ApiKey: ${ELEVENLABS_API_KEY:-}
       ElevenLabs__VoiceId: ${ELEVENLABS_VOICE_ID:-}
       Anthropic__ApiKey: ${ANTHROPIC_API_KEY:-}
+      Google__ServiceAccountJson: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
+      Voice__DemoClinicCalendarId: ${DEMO_CLINIC_CALENDAR_ID:-}
     ports:
       - "8000:8080"
 
