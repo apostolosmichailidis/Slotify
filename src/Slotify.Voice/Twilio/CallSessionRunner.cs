@@ -101,8 +101,9 @@ public sealed class CallSessionRunner(
 
             var outcome = failed ? CallOutcome.Failed : agent?.Outcome ?? CallOutcome.Abandoned;
             var transcript = agent?.Transcript;
+            var summary = agent?.Summary;
             if (call is not null)
-                await SafelyAsync(() => callLog.CompleteAsync(call.CallSid, outcome, transcript: transcript, ct: CancellationToken.None),
+                await SafelyAsync(() => callLog.CompleteAsync(call.CallSid, outcome, summary, transcript, CancellationToken.None),
                     "καταγραφή τέλους");
 
             await stream.HangUpAsync(CancellationToken.None);

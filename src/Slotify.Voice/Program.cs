@@ -3,6 +3,7 @@ using Slotify.Data;
 using Slotify.Voice;
 using Slotify.Voice.Agents;
 using Slotify.Voice.Llm;
+using Slotify.Voice.Scheduling;
 using Slotify.Voice.Speech;
 using Slotify.Voice.Twilio;
 
@@ -40,6 +41,11 @@ builder.Services.AddSingleton<ISpeechToText, DeepgramSpeechToText>();
 builder.Services.AddHttpClient<ITextToSpeech, ElevenLabsTextToSpeech>(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient<ILanguageModel, AnthropicLanguageModel>(c => c.Timeout = TimeSpan.FromSeconds(60));
 
+// Ημερολόγιο: προαιρετικό. Χωρίς αυτό η γραμματεία κρατάει αιτήματα αντί να κλείνει ραντεβού.
+builder.Services.AddOptions<GoogleOptions>().Bind(builder.Configuration.GetSection(GoogleOptions.Section));
+builder.Services.AddHttpClient(GoogleCalendar.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddSingleton<ICalendar, GoogleCalendar>();
+
 // Τα κλειδιά ελέγχονται στην εκκίνηση μόνο όταν τρέχει η κανονική γραμματεία,
 // ώστε το Echo να δουλεύει χωρίς λογαριασμούς.
 void AddValidatedOptions<T>(string section) where T : class
@@ -52,10 +58,10 @@ var app = builder.Build();
 
 await DatabaseInitializer.InitializeAsync(app.Services);
 
-var demoNumber = app.Services.GetRequiredService<IOptions<VoiceOptions>>().Value.DemoClinicPhoneNumber;
-if (app.Environment.IsDevelopment() && !string.IsNullOrWhiteSpace(demoNumber))
+var voiceOptions = app.Services.GetRequiredService<IOptions<VoiceOptions>>().Value;
+if (app.Environment.IsDevelopment() && !string.IsNullOrWhiteSpace(voiceOptions.DemoClinicPhoneNumber))
 {
-    await DatabaseInitializer.SeedDemoClinicAsync(app.Services, demoNumber);
+    await DatabaseInitializer.SeedDemoClinicAsync(app.Services, voiceOptions.DemoClinicPhoneNumber, voiceOptions.DemoClinicCalendarId);
 }
 
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });

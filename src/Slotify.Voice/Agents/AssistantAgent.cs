@@ -2,7 +2,9 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json.Nodes;
 using Slotify.Core.Calls;
+using Microsoft.Extensions.Options;
 using Slotify.Voice.Llm;
+using Slotify.Voice.Scheduling;
 using Slotify.Voice.Speech;
 
 namespace Slotify.Voice.Agents;
@@ -26,6 +28,9 @@ public sealed class AssistantAgent(
     ITextToSpeech textToSpeech,
     ILanguageModel languageModel,
     PromptBuilder prompts,
+    ICalendar calendar,
+    IOptions<GoogleOptions> google,
+    TimeProvider time,
     ILogger<AssistantAgent> logger) : IVoiceAgent
 {
     private const int MaxToolRounds = 5;
@@ -33,8 +38,7 @@ public sealed class AssistantAgent(
     /// <summary>Τόσα γράμματα σε ενδιάμεσο κείμενο αρκούν για να θεωρηθεί ότι ο καλών μιλάει (όχι θόρυβος).</summary>
     private const int BargeInMinChars = 3;
 
-    private static readonly IReadOnlyList<LlmTool> Tools =
-    [
+    private static readonly LlmTool EndCallTool =
         new("end_call",
             "Κλείνει την κλήση. Χρησιμοποίησέ το μόνο αφού έχεις πει αντίο και ο ασθενής δεν χρειάζεται κάτι άλλο.",
             new JsonObject
@@ -44,8 +48,10 @@ public sealed class AssistantAgent(
                 {
                     ["reason"] = new JsonObject { ["type"] = "string", ["description"] = "Σύντομα γιατί κλείνει η κλήση." },
                 },
-            }),
-    ];
+            });
+
+    private IReadOnlyList<LlmTool> _tools = [EndCallTool];
+    private BookingTools? _booking;
 
     private readonly Conversation _conversation = new();
     private readonly StringBuilder _pendingUserText = new();
@@ -73,7 +79,15 @@ public sealed class AssistantAgent(
     private volatile bool _hangingUp;
     private volatile bool _failed;
 
-    public CallOutcome Outcome => _failed ? CallOutcome.Failed : _userTurns > 0 ? CallOutcome.Completed : CallOutcome.Abandoned;
+    public CallOutcome Outcome =>
+        _booking?.LastBooking is not null ? CallOutcome.AppointmentBooked
+        : _failed ? CallOutcome.Failed
+        : _userTurns > 0 ? CallOutcome.Completed
+        : CallOutcome.Abandoned;
+
+    public string? Summary => _booking?.LastBooking is { } b
+        ? $"Ραντεβού: {b.Service}, {GreekText.DateTime(b.LocalStart)}, {b.PatientName}, {b.Phone}"
+        : null;
 
     public string? Transcript
     {
@@ -84,7 +98,16 @@ public sealed class AssistantAgent(
     {
         _context = context;
         var greeting = context.Clinic.EffectiveGreeting;
-        _system = prompts.Build(context.Clinic, greeting);
+
+        // Ραντεβού κατευθείαν στο ημερολόγιο, αν το ιατρείο έχει συνδέσει Google Calendar.
+        var calendarEnabled = google.Value.IsConfigured && !string.IsNullOrWhiteSpace(context.Clinic.GoogleCalendarId);
+        if (calendarEnabled)
+        {
+            _booking = new BookingTools(context.Clinic, context.Call.FromNumber, context.Call.CallSid, calendar, time, logger);
+            _tools = [EndCallTool, .. _booking.Tools];
+        }
+
+        _system = prompts.Build(context.Clinic, greeting, context.Call.FromNumber, calendarEnabled);
 
         _stt = await speechToText.StartAsync(ct);
         _listenLoop = Task.Run(() => ListenLoopAsync(_lifetime.Token));
@@ -259,7 +282,7 @@ public sealed class AssistantAgent(
 
             // Αν ο καλών διακόψει, το OperationCanceledException φεύγει προς τα πάνω
             // και το InterruptAsync γράφει στο ιστορικό ό,τι πρόλαβε να ακουστεί.
-            await foreach (var ev in languageModel.StreamAsync(new LlmRequest(_system, Tools, _conversation), ct))
+            await foreach (var ev in languageModel.StreamAsync(new LlmRequest(_system, _tools, _conversation), ct))
             {
                 switch (ev)
                 {
@@ -276,14 +299,22 @@ public sealed class AssistantAgent(
 
             if (splitter.Flush() is { } rest) await SpeakAsync(rest, ct);
 
-            // Από εδώ ως το τέλος του γύρου δεν υπάρχει await, ώστε το ιστορικό να μη
-            // μείνει ποτέ με tool_use χωρίς tool_result.
             _conversation.AddAssistant(text.ToString(), calls);
             if (text.Length > 0) _roundTranscriptIndex = AddTranscript("Γραμματεία", text.ToString().Trim());
             if (calls.Count == 0) return;
 
-            _conversation.AddToolResults(calls.Select(ExecuteTool).ToList());
+            // Τα εργαλεία τρέχουν με το token της κλήσης, όχι του γύρου: μια διακοπή δεν πρέπει να
+            // αφήσει tool_use χωρίς tool_result στο ιστορικό, ούτε ραντεβού κλεισμένο στη μέση.
+            var results = new List<(string, string, bool)>();
+            foreach (var call in calls) results.Add(await ExecuteToolAsync(call));
+            _conversation.AddToolResults(results);
+
+            // Ό,τι ειπώθηκε πριν από το εργαλείο («Μισό λεπτό να δω») είναι ήδη στο ιστορικό.
+            _roundSentences.Clear();
+            _roundTranscriptIndex = -1;
+
             if (_hangingUp) break;
+            ct.ThrowIfCancellationRequested();
         }
 
         if (_hangingUp)
@@ -293,18 +324,36 @@ public sealed class AssistantAgent(
         }
     }
 
-    private (string ToolUseId, string Content, bool IsError) ExecuteTool(LlmToolCall call)
+    private async Task<(string ToolUseId, string Content, bool IsError)> ExecuteToolAsync(LlmToolCall call)
     {
-        logger.LogInformation("Εργαλείο {Tool}: {Input}", call.Name, call.Input.ToJsonString());
-        switch (call.Name)
-        {
-            case "end_call":
-                _hangingUp = true;
-                return (call.Id, "Η κλήση κλείνει.", false);
+        logger.LogInformation("Εργαλείο {Tool}: {Input}", call.Name,
+            call.Input.ToJsonString(new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
 
-            default:
-                return (call.Id, $"Άγνωστο εργαλείο {call.Name}", true);
+        if (call.Name == "end_call")
+        {
+            _hangingUp = true;
+            return (call.Id, "Η κλήση κλείνει.", false);
         }
+
+        try
+        {
+            if (_booking is not null && await _booking.TryExecuteAsync(call, _lifetime.Token) is { } result)
+            {
+                logger.LogDebug("Αποτέλεσμα {Tool}: {Result}", call.Name, result.Content);
+                return (call.Id, result.Content, result.IsError);
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            // Ένα πρόβλημα στο ημερολόγιο δεν πρέπει να κλείσει την κλήση.
+            logger.LogError(ex, "Το εργαλείο {Tool} απέτυχε", call.Name);
+            return (call.Id,
+                "Τεχνικό πρόβλημα με το ημερολόγιο. Πάρε όνομα, υπηρεσία και ώρα που τον βολεύει, " +
+                "και πες ότι το ιατρείο θα τον καλέσει για επιβεβαίωση.", true);
+        }
+
+        return (call.Id, $"Άγνωστο εργαλείο {call.Name}", true);
     }
 
     /// <summary>Λέει μια πρόταση και επιστρέφει το mark που θα γυρίσει όταν παιχτεί.</summary>

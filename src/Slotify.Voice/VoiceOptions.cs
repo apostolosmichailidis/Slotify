@@ -32,6 +32,9 @@ public sealed class VoiceOptions
 
     /// <summary>Αν οριστεί, φτιάχνεται δοκιμαστικό ιατρείο σε αυτόν τον αριθμό (μόνο σε Development).</summary>
     public string? DemoClinicPhoneNumber { get; set; }
+
+    /// <summary>Το Google Calendar του δοκιμαστικού ιατρείου (π.χ. το email σου ή ένα νέο ημερολόγιο).</summary>
+    public string? DemoClinicCalendarId { get; set; }
 }
 
 public sealed class TwilioOptions

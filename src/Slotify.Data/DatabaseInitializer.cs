@@ -31,15 +31,25 @@ public static class DatabaseInitializer
     }
 
     /// <summary>Φτιάχνει ένα δοκιμαστικό οδοντιατρείο στον αριθμό που δίνεις, αν δεν υπάρχει ήδη.</summary>
-    public static async Task SeedDemoClinicAsync(IServiceProvider services, string phoneNumber, CancellationToken ct = default)
+    public static async Task SeedDemoClinicAsync(IServiceProvider services, string phoneNumber, string? calendarId = null, CancellationToken ct = default)
     {
         var factory = services.GetRequiredService<IDbContextFactory<SlotifyDbContext>>();
         await using var db = await factory.CreateDbContextAsync(ct);
 
         var normalized = PhoneNumbers.Normalize(phoneNumber);
-        if (await db.Clinics.AnyAsync(c => c.PhoneNumber == normalized, ct)) return;
+        var existing = await db.Clinics.FirstOrDefaultAsync(c => c.PhoneNumber == normalized, ct);
+        if (existing is not null)
+        {
+            // Αν προστέθηκε ημερολόγιο μετά την πρώτη εκκίνηση, το περνάμε στο υπάρχον ιατρείο.
+            if (!string.IsNullOrWhiteSpace(calendarId) && existing.GoogleCalendarId != calendarId)
+            {
+                existing.GoogleCalendarId = calendarId;
+                await db.SaveChangesAsync(ct);
+            }
+            return;
+        }
 
-        var clinic = new Clinic { Name = "Οδοντιατρείο Δοκιμής", PhoneNumber = normalized };
+        var clinic = new Clinic { Name = "Οδοντιατρείο Δοκιμής", PhoneNumber = normalized, GoogleCalendarId = calendarId };
 
         foreach (var day in new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday })
         {
