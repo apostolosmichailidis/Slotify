@@ -1,0 +1,133 @@
+@page "/calls"
+@inject DashboardQueries Queries
+@inject ClinicEditor Clinics
+@inject NavigationManager Nav
+
+<PageTitle>Κλήσεις · Slotify</PageTitle>
+
+<header class="page-head">
+    <h1>Κλήσεις</h1>
+    @if (result is not null)
+    {
+        <span class="muted">@result.Total @(result.Total == 1 ? "κλήση" : "κλήσεις")</span>
+    }
+</header>
+
+<section class="card filters">
+    <label class="field">
+        <span>Ιατρείο</span>
+        <select @bind="clinicFilter" @bind:after="Apply">
+            <option value="">Όλα</option>
+            @foreach (var c in clinics)
+            {
+                <option value="@c.Id">@c.Name</option>
+            }
+        </select>
+    </label>
+    <label class="field">
+        <span>Αποτέλεσμα</span>
+        <select @bind="outcomeFilter" @bind:after="Apply">
+            <option value="">Όλα</option>
+            @foreach (var o in Enum.GetValues<CallOutcome>())
+            {
+                <option value="@o">@Display.Outcome(o)</option>
+            }
+        </select>
+    </label>
+    <label class="field">
+        <span>Από</span>
+        <input type="date" @bind="fromFilter" @bind:after="Apply" />
+    </label>
+    <label class="field">
+        <span>Έως</span>
+        <input type="date" @bind="toFilter" @bind:after="Apply" />
+    </label>
+    <label class="field">
+        <span>Τηλέφωνο</span>
+        <input @bind="phoneFilter" @bind:after="Apply" placeholder="π.χ. 6912" inputmode="tel" />
+    </label>
+    @if (HasFilters)
+    {
+        <button class="link-btn" type="button" @onclick="Clear">Καθαρισμός</button>
+    }
+</section>
+
+@if (result is null)
+{
+    <p class="muted">Φόρτωση…</p>
+}
+else
+{
+    <section class="card">
+        <CallTable Rows="result.Rows" EmptyText="Καμία κλήση με αυτά τα φίλτρα." />
+    </section>
+
+    @if (result.Pages > 1)
+    {
+        <nav class="pager">
+            <a class="btn @(result.Page <= 1 ? "disabled" : "")" href="@PageUrl(result.Page - 1)">← Νεότερες</a>
+            <span class="muted">Σελίδα @result.Page από @result.Pages</span>
+            <a class="btn @(result.Page >= result.Pages ? "disabled" : "")" href="@PageUrl(result.Page + 1)">Παλαιότερες →</a>
+        </nav>
+    }
+}
+
+@code {
+    private const int PageSize = 50;
+
+    [SupplyParameterFromQuery(Name = "clinic")] public Guid? ClinicId { get; set; }
+    [SupplyParameterFromQuery(Name = "outcome")] public string? Outcome { get; set; }
+    [SupplyParameterFromQuery(Name = "from")] public string? From { get; set; }
+    [SupplyParameterFromQuery(Name = "to")] public string? To { get; set; }
+    [SupplyParameterFromQuery(Name = "phone")] public string? Phone { get; set; }
+    [SupplyParameterFromQuery(Name = "page")] public int? PageNumber { get; set; }
+
+    private List<ClinicRow> clinics = [];
+    private CallPage? result;
+
+    private string clinicFilter = "";
+    private string outcomeFilter = "";
+    private DateOnly? fromFilter;
+    private DateOnly? toFilter;
+    private string? phoneFilter;
+
+    private bool HasFilters =>
+        clinicFilter != "" || outcomeFilter != "" || fromFilter is not null || toFilter is not null || !string.IsNullOrWhiteSpace(phoneFilter);
+
+    protected override async Task OnInitializedAsync() => clinics = await Clinics.ListAsync();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        clinicFilter = ClinicId?.ToString() ?? "";
+        outcomeFilter = Enum.TryParse<CallOutcome>(Outcome, out var o) ? o.ToString() : "";
+        fromFilter = DateOnly.TryParse(From, out var f) ? f : null;
+        toFilter = DateOnly.TryParse(To, out var t) ? t : null;
+        phoneFilter = Phone;
+
+        var filter = new CallFilter
+        {
+            ClinicId = ClinicId,
+            Outcome = Enum.TryParse<CallOutcome>(Outcome, out var oo) ? oo : null,
+            From = fromFilter,
+            To = toFilter,
+            Phone = Phone,
+        };
+        result = await Queries.SearchAsync(filter, PageNumber ?? 1, PageSize);
+    }
+
+    private void Apply() => Nav.NavigateTo(Url(page: null));
+
+    private void Clear() => Nav.NavigateTo("calls");
+
+    private string PageUrl(int page) => Url(page);
+
+    private string Url(int? page) => Nav.GetUriWithQueryParameters(new Dictionary<string, object?>
+    {
+        ["clinic"] = Guid.TryParse(clinicFilter, out var c) ? c : null,
+        ["outcome"] = string.IsNullOrEmpty(outcomeFilter) ? null : outcomeFilter,
+        ["from"] = fromFilter?.ToString("yyyy-MM-dd"),
+        ["to"] = toFilter?.ToString("yyyy-MM-dd"),
+        ["phone"] = string.IsNullOrWhiteSpace(phoneFilter) ? null : phoneFilter.Trim(),
+        ["page"] = page is > 1 ? page : null,
+    });
+}

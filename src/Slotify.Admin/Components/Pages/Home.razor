@@ -1,7 +1,112 @@
-﻿@page "/"
+@page "/"
+@inject DashboardQueries Queries
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Αρχική · Slotify</PageTitle>
 
-<h1>Hello, world!</h1>
+<header class="page-head">
+    <h1>Αρχική</h1>
+    <button class="btn" @onclick="LoadAsync" disabled="@loading">Ανανέωση</button>
+</header>
 
-Welcome to your new app.
+@if (data is null)
+{
+    <p class="muted">Φόρτωση…</p>
+}
+else
+{
+    <section class="stats">
+        <div class="stat">
+            <span class="stat-label">Σήμερα</span>
+            <span class="stat-value">@data.CallsToday</span>
+            <span class="stat-sub">κλήσεις · @data.BookedToday ραντεβού</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">7 μέρες</span>
+            <span class="stat-value">@data.Calls7Days</span>
+            <span class="stat-sub">κλήσεις · @data.Booked7Days ραντεβού</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Αυτόν τον μήνα</span>
+            <span class="stat-value">@data.BilledMinutesMonth</span>
+            <span class="stat-sub">λεπτά από @data.CallsMonth κλήσεις</span>
+        </div>
+        <div class="stat @(data.FailedMonth > 0 ? "stat-warn" : "")">
+            <span class="stat-label">Σφάλματα μήνα</span>
+            <span class="stat-value">@data.FailedMonth</span>
+            <span class="stat-sub">
+                @if (data.InProgress > 0)
+                {
+                    <text>@data.InProgress σε εξέλιξη τώρα</text>
+                }
+                else
+                {
+                    <text>κλήσεις που κόπηκαν</text>
+                }
+            </span>
+        </div>
+    </section>
+
+    <section class="card">
+        <h2>Ανά ιατρείο, αυτόν τον μήνα</h2>
+        @if (data.PerClinic.Count == 0)
+        {
+            <p class="empty">Καμία κλήση ακόμα αυτόν τον μήνα.</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Ιατρείο</th>
+                            <th class="num">Κλήσεις</th>
+                            <th class="num">Ραντεβού</th>
+                            <th class="num">Σφάλματα</th>
+                            <th class="num" title="Στρογγυλεμένα προς τα πάνω ανά κλήση, όπως χρεώνει το Twilio">Λεπτά</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var c in data.PerClinic)
+                        {
+                            <tr>
+                                <td><a href="calls?clinic=@c.ClinicId">@c.ClinicName</a></td>
+                                <td class="num">@c.Calls</td>
+                                <td class="num">@c.Booked</td>
+                                <td class="num">@c.Failed</td>
+                                <td class="num">@c.BilledMinutes</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="card">
+        <div class="card-head">
+            <h2>Τελευταίες κλήσεις</h2>
+            <a href="calls">Όλες →</a>
+        </div>
+        <CallTable Rows="data.Recent" EmptyText="Δεν έχει έρθει καμία κλήση ακόμα." />
+    </section>
+}
+
+@code {
+    private Dashboard? data;
+    private bool loading;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            data = await Queries.LoadAsync();
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+}

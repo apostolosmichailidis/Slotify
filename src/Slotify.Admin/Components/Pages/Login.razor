@@ -1,0 +1,38 @@
+@page "/login"
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@layout Layout.BareLayout
+
+<PageTitle>Σύνδεση · Slotify</PageTitle>
+
+<div class="bare-card">
+    <div class="brand brand-lg"><span class="brand-mark">S</span> Slotify</div>
+    <p class="muted">Διαχειριστικό</p>
+
+    @if (Error is not null)
+    {
+        <div class="alert alert-bad">Λάθος όνομα ή κωδικός.</div>
+    }
+
+    <form method="post" action="account/login" class="stack" data-enhance="false">
+        <AntiforgeryToken />
+        <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+        <label class="field">
+            <span>Όνομα χρήστη</span>
+            <input name="username" autocomplete="username" required autofocus />
+        </label>
+        <label class="field">
+            <span>Κωδικός</span>
+            <input name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <button class="btn btn-primary" type="submit">Σύνδεση</button>
+    </form>
+</div>
+
+@code {
+    [SupplyParameterFromQuery]
+    private string? Error { get; set; }
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+}

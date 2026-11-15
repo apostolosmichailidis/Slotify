@@ -1,0 +1,117 @@
+@inject ClinicEditor Editor
+
+<section class="card">
+    <div class="card-head">
+        <h2>Ωράριο</h2>
+        <button class="btn btn-small" type="button" @onclick="CopyMondayToWeekdays"
+                title="Βάζει στις Τρίτη–Παρασκευή ό,τι έχει η Δευτέρα">Δευτέρα → όλες τις καθημερινές</button>
+    </div>
+    <p class="muted">
+        Μια μέρα μπορεί να έχει πρωινό και απογευματινό διάστημα. Μέρα χωρίς διάστημα σημαίνει κλειστά.
+        Η γραμματεία κλείνει ραντεβού μόνο μέσα σε αυτές τις ώρες.
+    </p>
+
+    <div class="hours">
+        @foreach (var day in Display.Week)
+        {
+            var dayRows = rows.Where(r => r.Day == day).ToList();
+            <div class="hours-day">
+                <div class="hours-name">@Display.DayName(day)</div>
+                <div class="hours-ranges">
+                    @if (dayRows.Count == 0)
+                    {
+                        <span class="muted">Κλειστά</span>
+                    }
+                    @foreach (var r in dayRows)
+                    {
+                        <div class="hours-range">
+                            <input type="time" step="300" @bind="r.Opens" aria-label="Ανοίγει" />
+                            <span>–</span>
+                            <input type="time" step="300" @bind="r.Closes" aria-label="Κλείνει" />
+                            <button class="icon-btn" type="button" title="Αφαίρεση" @onclick="() => rows.Remove(r)">✕</button>
+                        </div>
+                    }
+                </div>
+                <button class="link-btn" type="button" @onclick="() => AddRange(day)">+ διάστημα</button>
+            </div>
+        }
+    </div>
+
+    @if (error is not null)
+    {
+        <div class="alert alert-bad">@error</div>
+    }
+
+    <div class="form-actions">
+        <button class="btn btn-primary" type="button" @onclick="SaveAsync" disabled="@saving">Αποθήκευση ωραρίου</button>
+        @if (saved)
+        {
+            <span class="saved">✓ Αποθηκεύτηκε</span>
+        }
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public Clinic Clinic { get; set; } = default!;
+
+    [Parameter]
+    public EventCallback Saved { get; set; }
+
+    private List<HoursRow> rows = [];
+    private Guid? loadedId;
+    private bool saving;
+    private bool saved;
+    private string? error;
+
+    protected override void OnParametersSet()
+    {
+        if (loadedId == Clinic.Id) return;
+        loadedId = Clinic.Id;
+        rows = Clinic.OpeningHours
+            .OrderBy(h => h.Opens)
+            .Select(h => new HoursRow { Day = h.Day, Opens = h.Opens, Closes = h.Closes })
+            .ToList();
+    }
+
+    private void AddRange(DayOfWeek day)
+    {
+        saved = false;
+        var last = rows.Where(r => r.Day == day).OrderBy(r => r.Opens).LastOrDefault();
+        rows.Add(last is null
+            ? new HoursRow { Day = day, Opens = new TimeOnly(9, 0), Closes = new TimeOnly(14, 0) }
+            : new HoursRow { Day = day, Opens = new TimeOnly(17, 30), Closes = new TimeOnly(21, 0) });
+    }
+
+    private void CopyMondayToWeekdays()
+    {
+        saved = false;
+        var monday = rows.Where(r => r.Day == DayOfWeek.Monday).ToList();
+        var weekdays = new[] { DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday };
+        rows.RemoveAll(r => weekdays.Contains(r.Day));
+        foreach (var day in weekdays)
+            rows.AddRange(monday.Select(m => new HoursRow { Day = day, Opens = m.Opens, Closes = m.Closes }));
+    }
+
+    private async Task SaveAsync()
+    {
+        saving = true;
+        saved = false;
+        error = null;
+        try
+        {
+            var result = await Editor.SaveOpeningHoursAsync(Clinic.Id, rows);
+            if (!result.Ok)
+            {
+                error = result.Error;
+                return;
+            }
+            saved = true;
+            await Saved.InvokeAsync();
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+}

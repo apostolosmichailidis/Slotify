@@ -15,5 +15,7 @@ WORKDIR /app
 COPY --from=build /app .
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
+# Τα κλειδιά του cookie σύνδεσης, σε volume για να μην αποσυνδέεσαι σε κάθε επανεκκίνηση.
+RUN mkdir /keys && chown $APP_UID /keys
 USER $APP_UID
 ENTRYPOINT ["dotnet", "Slotify.Admin.dll"]

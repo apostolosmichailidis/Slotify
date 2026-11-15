@@ -57,8 +57,14 @@ services:
         condition: service_healthy
     environment:
       ConnectionStrings__Slotify: Host=db;Port=5432;Database=slotify;Username=slotify;Password=${POSTGRES_PASSWORD:-slotify}
+      Admin__Username: ${ADMIN_USERNAME:-admin}
+      Admin__Password: ${ADMIN_PASSWORD}
+      Admin__KeysDirectory: /keys
+    volumes:
+      - adminkeys:/keys
     ports:
       - "8001:8080"
 
 volumes:
   pgdata:
+  adminkeys:
