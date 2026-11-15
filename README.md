@@ -11,7 +11,9 @@ src/
   Slotify.Data    Postgres με Entity Framework Core.
   Slotify.Voice   ASP.NET Core API: webhook του Twilio + WebSocket για τον ζωντανό ήχο.
   Slotify.Admin   Διαχειριστικό (Blazor Server): ιατρεία, ωράριο, υπηρεσίες, αργίες, κλήσεις, στατιστικά.
-docker-compose.yml  Postgres + Voice + Admin
+docker-compose.yml       Postgres + Voice + Admin (τοπικά)
+docker-compose.prod.yml  Παραγωγή: + Caddy (HTTPS) + backup
+deploy/                  Caddyfile, script του backup
 ```
 
 ## Πώς κυλάει μια κλήση
@@ -147,6 +149,51 @@ dotnet run
 > Αν αλλάξει το URL του ngrok, άλλαξε και το `Voice:PublicBaseUrl` και το webhook στο Twilio.
 > Η υπογραφή υπολογίζεται πάνω στο URL, και αν δεν ταιριάζουν, το webhook γυρνάει 403.
 
+## Email στον γιατρό και SMS στον ασθενή
+
+Στο τέλος κάθε κλήσης γράφονται στη βάση (πίνακας `notifications`) όσα πρέπει να σταλούν, και ένας worker
+του Voice τα στέλνει. Αν πέσει ο πάροχος ή ο server, ξαναδοκιμάζει (30″, 2′, 4′ … ως 8 φορές, για 24 ώρες).
+Ό,τι δεν φτάσει, φαίνεται στο διαχειριστικό: στην κλήση και ως προειδοποίηση στην αρχική.
+
+| Πότε | Τι | Σε ποιον |
+|---|---|---|
+| Κλείστηκε ραντεβού | Email «Νέο ραντεβού» | γιατρό, αν έχει email |
+| Κλείστηκε ραντεβού | SMS επιβεβαίωσης | ασθενή, αν το ιατρείο έχει ενεργά SMS και ο αριθμός είναι ελληνικό κινητό |
+| Η γραμματεία κράτησε μήνυμα | Email «Καλέστε πίσω» με όνομα, τηλέφωνο και τι θέλει | γιατρό |
+| Η κλήση κόπηκε από σφάλμα | Email με τον αριθμό για να καλέσει πίσω | γιατρό |
+
+Κλήσεις μόνο για πληροφορίες δεν στέλνουν τίποτα.
+
+Η γραμματεία κρατάει μηνύματα με το εργαλείο `take_message`: για ραντεβού όταν το ιατρείο δεν έχει ημερολόγιο,
+για ακύρωση ή αλλαγή ραντεβού, ή όταν ο ασθενής θέλει να μιλήσει με τον γιατρό. Στο διαχειριστικό φαίνονται ως «Μήνυμα».
+
+**Ρυθμίσεις ανά ιατρείο** (Διαχειριστικό → Στοιχεία → Ειδοποιήσεις): email γιατρού, SMS ναι ή όχι,
+αποστολέας SMS (έως 11 λατινικά, π.χ. `DrPapadop`). Υπάρχουν κουμπιά για δοκιμαστικό email και SMS.
+
+**Χρέωση SMS.** Η αρχική δείχνει ανά ιατρείο τα SMS του μήνα και τα κομμάτια τους. Τα ελληνικά χωράνε 70 χαρακτήρες
+στο κομμάτι, οπότε το SMS επιβεβαίωσης πιάνει συνήθως 2. Τα δοκιμαστικά δεν μετράνε.
+
+### Τι στήνεις εσύ
+
+**Email** (π.χ. MailerSend, δωρεάν πακέτο):
+1. Λογαριασμός και **επιβεβαίωση domain**: βάζεις στο DNS τις εγγραφές SPF/DKIM που σου δίνει. Χωρίς αυτό
+   τα email πάνε στα ανεπιθύμητα ή δεν φεύγουν καθόλου.
+2. Domains → SMTP → νέος SMTP user. Παίρνεις username και password.
+3. Στο `.env`: `SMTP_HOST=smtp.mailersend.net`, `SMTP_PORT=587`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
+   `EMAIL_FROM=noreply@domain.gr`. Με άλλον πάροχο αλλάζεις μόνο αυτά.
+
+**SMS** (με τον ίδιο λογαριασμό Twilio):
+1. Βάλε το `TWILIO_ACCOUNT_SID` στο `.env`.
+2. Twilio Console → Messaging → Settings → Geo permissions: ενεργοποίησε την **Ελλάδα**.
+3. Τα SMS φεύγουν με αποστολέα κείμενο (alphanumeric sender ID). Η Ελλάδα το δέχεται, αλλά καλό είναι
+   να στείλεις πρώτα ένα δοκιμαστικό από το διαχειριστικό στο κινητό σου.
+
+Τοπικά, με user-secrets στο `src/Slotify.Voice`: `Email:SmtpHost`, `Email:SmtpPort`, `Email:Username`,
+`Email:Password`, `Email:FromAddress`, `Twilio:AccountSid`.
+
+> Τα email περιέχουν όνομα και τηλέφωνο του ασθενή και τι ζήτησε. Η απομαγνητοφώνηση **δεν** μπαίνει στο email
+> και μένει μόνο στη βάση.
+
 ## Διαχειριστικό
 
 Στο `http://localhost:8001`. Ένας λογαριασμός διαχειριστή, από τις ρυθμίσεις:
@@ -182,15 +229,86 @@ dotnet run
 
 ## Βάση δεδομένων
 
-Όσο δεν υπάρχουν migrations, η εφαρμογή φτιάχνει τους πίνακες μόνη της (`EnsureCreated`).
-Πριν από την παραγωγή, φτιάξε το πρώτο migration:
+Η μορφή της βάσης αλλάζει μόνο με migrations (`src/Slotify.Data/Migrations`). Voice και Admin τα τρέχουν μόνα τους
+στην εκκίνηση. Αν ξεκινήσουν μαζί, δεν πειράζει: το EF κλειδώνει τη βάση όσο τρέχουν τα migrations.
+
+Αν αλλάξεις κάποιο μοντέλο στο Core:
 
 ```bash
-dotnet tool install --global dotnet-ef
-dotnet ef migrations add Initial -p src/Slotify.Data
+dotnet tool install --global dotnet-ef        # μία φορά
+dotnet ef migrations add ΠεριγραφήΑλλαγής -p src/Slotify.Data -o Migrations
 ```
 
-Από εκεί και πέρα η εφαρμογή τρέχει τα migrations μόνη της στην εκκίνηση.
+> Βάσεις από παλιότερη έκδοση (φτιαγμένες με `EnsureCreated`, χωρίς migrations) περνούν μόνες τους στα migrations
+> στην πρώτη εκκίνηση, χωρίς να χαθούν δεδομένα.
+> Σε ολοκαίνουργια βάση το log δείχνει μία φορά `fail ... __EFMigrationsHistory`. Είναι αναμενόμενο.
+
+## Ανέβασμα σε server
+
+Όλα τρέχουν με Docker Compose. Το Caddy βγάζει μόνο του πιστοποιητικά HTTPS, και μόνο αυτό ανοίγει θύρες (80/443).
+Η βάση, το Voice και το Admin δεν φαίνονται απ' έξω.
+
+```
+Twilio ──https/wss──▶ voice.domain.gr ─┐
+                                       ├─ Caddy ─▶ voice / admin ─▶ Postgres ◀─ backup (κάθε μέρα)
+εσύ ────────https───▶ admin.domain.gr ─┘
+```
+
+### Τι κάνεις εσύ (μία φορά)
+
+1. **Server.** Ένα VPS με Ubuntu 24.04 (π.χ. Hetzner CX22, 2 vCPU / 4 GB, σε Ευρώπη). Μπαίνεις με SSH key.
+2. **Domain.** Στο DNS του domain σου βάζεις δύο εγγραφές `A` προς την IP του server:
+   `voice.domain.gr` και `admin.domain.gr`. Περίμενε να «πιάσουν» (`ping voice.domain.gr` δείχνει την IP).
+3. **Docker και firewall** στον server:
+   ```bash
+   curl -fsSL https://get.docker.com | sh
+   ufw allow OpenSSH && ufw allow 80 && ufw allow 443 && ufw enable
+   ```
+4. **Κώδικας και ρυθμίσεις:**
+   ```bash
+   git clone https://github.com/apostolosmichailidis/Slotify.git && cd Slotify
+   cp .env.example .env && nano .env
+   ```
+   Συμπλήρωσε: `VOICE_DOMAIN`, `ADMIN_DOMAIN`, `ADMIN_PASSWORD`, `POSTGRES_PASSWORD` (νέο, δυνατό),
+   `STREAM_SECRET` (`openssl rand -base64 32`), `TWILIO_AUTH_TOKEN`, `VOICE_MODE=Assistant` και τα κλειδιά
+   Deepgram / ElevenLabs / Anthropic / Google. Το `PUBLIC_BASE_URL` δεν χρειάζεται εδώ, βγαίνει από το `VOICE_DOMAIN`.
+5. **Εκκίνηση:**
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f caddy voice admin
+   ```
+6. **Διαχειριστικό:** άνοιξε `https://admin.domain.gr` και φτιάξε το ιατρείο με τον αριθμό Twilio, το ωράριο και τις υπηρεσίες.
+   Στην παραγωγή δεν φτιάχνεται δοκιμαστικό ιατρείο.
+7. **Twilio Console:** στον αριθμό, «A call comes in» → Webhook `https://voice.domain.gr/twilio/voice`, HTTP POST.
+8. Πάρε τηλέφωνο.
+
+### Ενημέρωση σε νέα έκδοση
+
+```bash
+git pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+Τα migrations τρέχουν μόνα τους. Όσο ξαναξεκινά το Voice, όποια κλήση είναι σε εξέλιξη κόβεται, οπότε κάν' το εκτός ωραρίου.
+
+### Backup
+
+Το container `backup` κρατάει ένα αντίγραφο της βάσης την ημέρα στον φάκελο `backups/` του server
+(τελευταίες 14 μέρες, αλλάζει με `BACKUP_KEEP_DAYS`). **Ο φάκελος είναι στον ίδιο server**: αν χαθεί ο server,
+χάνονται κι αυτά. Κατέβαζέ τα πού και πού στον υπολογιστή σου, ή ενεργοποίησε τα backups του VPS
+(στη Hetzner κοστίζουν 20% της τιμής του server).
+
+```bash
+scp root@server:Slotify/backups/slotify-*.dump .        # κατέβασμα
+```
+
+Επαναφορά (σβήνει ό,τι υπάρχει στη βάση):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml stop voice admin
+docker compose exec -T db pg_restore -U slotify -d slotify --clean --if-exists < backups/slotify-ΗΜΕΡΟΜΗΝΙΑ.dump
+docker compose -f docker-compose.yml -f docker-compose.prod.yml start voice admin
+```
 
 ## Ασφάλεια
 

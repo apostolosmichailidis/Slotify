@@ -30,6 +30,11 @@ else
             <span class="stat-value">@data.BilledMinutesMonth</span>
             <span class="stat-sub">λεπτά από @data.CallsMonth κλήσεις</span>
         </div>
+        <div class="stat">
+            <span class="stat-label">SMS μήνα</span>
+            <span class="stat-value">@data.SmsMonth</span>
+            <span class="stat-sub">@data.SmsSegmentsMonth κομμάτια προς χρέωση</span>
+        </div>
         <div class="stat @(data.FailedMonth > 0 ? "stat-warn" : "")">
             <span class="stat-label">Σφάλματα μήνα</span>
             <span class="stat-value">@data.FailedMonth</span>
@@ -45,6 +50,14 @@ else
             </span>
         </div>
     </section>
+
+    @if (data.FailedNotifications > 0)
+    {
+        <div class="alert alert-bad">
+            @data.FailedNotifications @(data.FailedNotifications == 1 ? "email/SMS δεν στάλθηκε" : "email/SMS δεν στάλθηκαν")
+            την τελευταία εβδομάδα. Δες τις κλήσεις με σήμα «Απέτυχε» ή τα logs του Voice.
+        </div>
+    }
 
     <section class="card">
         <h2>Ανά ιατρείο, αυτόν τον μήνα</h2>
@@ -63,6 +76,7 @@ else
                             <th class="num">Ραντεβού</th>
                             <th class="num">Σφάλματα</th>
                             <th class="num" title="Στρογγυλεμένα προς τα πάνω ανά κλήση, όπως χρεώνει το Twilio">Λεπτά</th>
+                            <th class="num" title="SMS που στάλθηκαν (κομμάτια προς χρέωση)">SMS</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -74,6 +88,7 @@ else
                                 <td class="num">@c.Booked</td>
                                 <td class="num">@c.Failed</td>
                                 <td class="num">@c.BilledMinutes</td>
+                                <td class="num">@(c.Sms == 0 ? "—" : $"{c.Sms} ({c.SmsSegments})")</td>
                             </tr>
                         }
                     </tbody>

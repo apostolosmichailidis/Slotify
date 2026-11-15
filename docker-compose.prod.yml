@@ -1,0 +1,53 @@
+# Παραγωγή, πάνω από το docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Μόνο το Caddy ανοίγει θύρες (80/443). Βάση, Voice και Admin δεν φαίνονται απ' έξω.
+
+services:
+  db:
+    ports: !reset []
+
+  voice:
+    ports: !reset []
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Voice__PublicBaseUrl: https://${VOICE_DOMAIN:?Λείπει το VOICE_DOMAIN στο .env}
+
+  admin:
+    ports: !reset []
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Admin__Password: ${ADMIN_PASSWORD:?Λείπει το ADMIN_PASSWORD στο .env}
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [voice, admin]
+    environment:
+      VOICE_DOMAIN: ${VOICE_DOMAIN}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:?Λείπει το ADMIN_DOMAIN στο .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+
+  backup:
+    image: postgres:17
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-slotify}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      TZ: Europe/Athens
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    volumes:
+      - ./deploy/backup.sh:/backup.sh:ro
+      - ./backups:/backups
+
+volumes:
+  caddydata:
+  caddyconfig:

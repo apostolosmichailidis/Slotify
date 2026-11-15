@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Slotify.Core;
 using Slotify.Core.Clinics;
+using Slotify.Core.Notifications;
 using Slotify.Data;
 
 namespace Slotify.Admin.Services;
@@ -49,8 +50,18 @@ public sealed class ClinicForm
 
     public bool IsActive { get; set; } = true;
 
+    [MaxLength(500)]
+    public string? NotificationEmail { get; set; }
+
+    public bool SendPatientSms { get; set; }
+
+    public string? SmsSenderId { get; set; }
+
     public static ClinicForm From(Clinic c) => new()
     {
+        NotificationEmail = c.NotificationEmail,
+        SendPatientSms = c.SendPatientSms,
+        SmsSenderId = c.SmsSenderId,
         Name = c.Name,
         PhoneNumber = c.PhoneNumber,
         TimeZoneId = c.TimeZoneId,
@@ -135,6 +146,16 @@ public sealed class ClinicEditor(IDbContextFactory<SlotifyDbContext> dbFactory, 
         if (!TimeZoneInfo.TryFindSystemTimeZoneById(form.TimeZoneId, out _))
             return EditResult.Fail($"Άγνωστη ζώνη ώρας «{form.TimeZoneId}».");
 
+        var emails = SplitEmails(form.NotificationEmail);
+        if (emails.FirstOrDefault(e => !IsEmail(e)) is { } badEmail)
+            return EditResult.Fail($"Το «{badEmail}» δεν είναι σωστό email.");
+
+        var sender = form.SmsSenderId?.Trim();
+        if (!string.IsNullOrEmpty(sender) && !IsSmsSender(sender))
+            return EditResult.Fail("Ο αποστολέας SMS θέλει 3 έως 11 λατινικά γράμματα ή αριθμούς (τουλάχιστον ένα γράμμα), χωρίς κενά.");
+        if (form.SendPatientSms && string.IsNullOrEmpty(sender))
+            return EditResult.Fail("Για να φεύγουν SMS, γράψε αποστολέα SMS (π.χ. το όνομα του γιατρού με λατινικά).");
+
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
         if (await db.Clinics.AnyAsync(c => c.PhoneNumber == phone && c.Id != id, ct))
@@ -162,6 +183,9 @@ public sealed class ClinicEditor(IDbContextFactory<SlotifyDbContext> dbFactory, 
         clinic.SlotStepMinutes = form.SlotStepMinutes;
         clinic.BookingHorizonDays = form.BookingHorizonDays;
         clinic.IsActive = form.IsActive;
+        clinic.NotificationEmail = emails.Count == 0 ? null : string.Join(", ", emails);
+        clinic.SendPatientSms = form.SendPatientSms;
+        clinic.SmsSenderId = string.IsNullOrEmpty(sender) ? null : sender;
 
         try
         {
@@ -173,6 +197,7 @@ public sealed class ClinicEditor(IDbContextFactory<SlotifyDbContext> dbFactory, 
         }
 
         form.PhoneNumber = phone;
+        form.NotificationEmail = clinic.NotificationEmail;
         return EditResult.Success(clinic.Id);
     }
 
@@ -294,6 +319,76 @@ public sealed class ClinicEditor(IDbContextFactory<SlotifyDbContext> dbFactory, 
         await db.SaveChangesAsync(ct);
         return fresh.Count;
     }
+
+    /// <summary>
+    /// Δοκιμαστικό email στο ιατρείο. Το γράφει στη βάση και το στέλνει το Voice, όπως τα κανονικά,
+    /// οπότε δοκιμάζει όλη τη διαδρομή (και τις ρυθμίσεις SMTP του Voice).
+    /// </summary>
+    public async Task<EditResult> QueueTestEmailAsync(Guid clinicId, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var clinic = await db.Clinics.FirstOrDefaultAsync(c => c.Id == clinicId, ct);
+        if (clinic is null) return EditResult.Fail("Το ιατρείο δεν βρέθηκε.");
+        if (string.IsNullOrWhiteSpace(clinic.NotificationEmail)) return EditResult.Fail("Αποθήκευσε πρώτα ένα email.");
+
+        var n = new Notification
+        {
+            ClinicId = clinic.Id,
+            Channel = NotificationChannel.Email,
+            To = clinic.NotificationEmail,
+            Subject = $"{clinic.Name} · Δοκιμαστικό email από το Slotify",
+            Body = "<p>Αν διαβάζεις αυτό, τα email της ψηφιακής γραμματείας φτάνουν κανονικά.</p>" +
+                   "<p>Από εδώ και πέρα θα έρχεται email για κάθε ραντεβού, μήνυμα ή κλήση που κόπηκε.</p>",
+        };
+        db.Notifications.Add(n);
+        await db.SaveChangesAsync(ct);
+        return EditResult.Success(n.Id);
+    }
+
+    /// <summary>Δοκιμαστικό SMS σε ένα κινητό. Χρεώνεται όπως τα κανονικά.</summary>
+    public async Task<EditResult> QueueTestSmsAsync(Guid clinicId, string? mobile, CancellationToken ct = default)
+    {
+        string to;
+        try { to = PhoneNumbers.Normalize(mobile ?? ""); }
+        catch (ArgumentException) { return EditResult.Fail("Γράψε ένα κινητό."); }
+        if (!SmsText.IsGreekMobile(to)) return EditResult.Fail("Στέλνουμε SMS μόνο σε ελληνικά κινητά (69…).");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var clinic = await db.Clinics.FirstOrDefaultAsync(c => c.Id == clinicId, ct);
+        if (clinic is null) return EditResult.Fail("Το ιατρείο δεν βρέθηκε.");
+        if (string.IsNullOrWhiteSpace(clinic.SmsSenderId)) return EditResult.Fail("Αποθήκευσε πρώτα αποστολέα SMS.");
+
+        var n = new Notification
+        {
+            ClinicId = clinic.Id,
+            Channel = NotificationChannel.Sms,
+            To = to,
+            Body = SmsText.BookingConfirmation(clinic.Name, clinic.PhoneNumber, "Δοκιμή",
+                Display.ToAthens(time.GetUtcNow()).DateTime.Date.AddDays(1).AddHours(10)),
+        };
+        db.Notifications.Add(n);
+        await db.SaveChangesAsync(ct);
+        return EditResult.Success(n.Id);
+    }
+
+    /// <summary>Η κατάσταση μιας ειδοποίησης, για να φανεί αν έφυγε το δοκιμαστικό.</summary>
+    public async Task<Notification?> GetNotificationAsync(Guid id, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        return await db.Notifications.AsNoTracking().FirstOrDefaultAsync(n => n.Id == id, ct);
+    }
+
+    public static List<string> SplitEmails(string? s) =>
+        (s ?? "").Split([',', ';', ' ', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static bool IsEmail(string s) =>
+        System.Net.Mail.MailAddress.TryCreate(s, out var a) && a.Address == s && s.Contains('.', StringComparison.Ordinal);
+
+    /// <summary>Alphanumeric sender ID: 3–11 λατινικά γράμματα/αριθμοί, με τουλάχιστον ένα γράμμα.</summary>
+    public static bool IsSmsSender(string s) =>
+        s.Length is >= 3 and <= 11 && s.All(char.IsAsciiLetterOrDigit) && s.Any(char.IsAsciiLetter);
 
     private static DateOnly FirstOfMonth(DateOnly d) => new(d.Year, d.Month, 1);
 

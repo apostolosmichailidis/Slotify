@@ -20,6 +20,21 @@ public class Clinic
     /// <summary>Το Google Calendar όπου γράφονται τα ραντεβού.</summary>
     public string? GoogleCalendarId { get; set; }
 
+    /// <summary>
+    /// Πού πάνε τα email μετά από κάθε κλήση που θέλει κάτι από το ιατρείο (ραντεβού, μήνυμα, κομμένη κλήση).
+    /// Μία ή περισσότερες διευθύνσεις χωρισμένες με κόμμα. Κενό = χωρίς email.
+    /// </summary>
+    public string? NotificationEmail { get; set; }
+
+    /// <summary>SMS επιβεβαίωσης στον ασθενή όταν η γραμματεία κλείνει ραντεβού. Χρεώνεται χωριστά.</summary>
+    public bool SendPatientSms { get; set; }
+
+    /// <summary>
+    /// Ποιος φαίνεται ως αποστολέας του SMS: έως 11 λατινικά γράμματα ή αριθμοί, π.χ. "DrPapadop".
+    /// Ο ασθενής δεν μπορεί να απαντήσει σε τέτοιο αποστολέα, γι' αυτό το SMS λέει τον αριθμό του ιατρείου.
+    /// </summary>
+    public string? SmsSenderId { get; set; }
+
     /// <summary>Προαιρετικός δικός του χαιρετισμός. Αν λείπει, φτιάχνεται από το όνομα.</summary>
     public string? Greeting { get; set; }
 

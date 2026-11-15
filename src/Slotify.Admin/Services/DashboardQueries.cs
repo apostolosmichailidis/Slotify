@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Slotify.Core.Calls;
+using Slotify.Core.Notifications;
 using Slotify.Data;
 
 namespace Slotify.Admin.Services;
@@ -11,13 +12,14 @@ public sealed record CallRow(
     public double? DurationSeconds => EndedAt is null ? null : (EndedAt.Value - StartedAt).TotalSeconds;
 }
 
-public sealed record ClinicMonth(Guid ClinicId, string ClinicName, int Calls, int Booked, int Failed, int BilledMinutes);
+public sealed record ClinicMonth(Guid ClinicId, string ClinicName, int Calls, int Booked, int Failed, int BilledMinutes, int Sms, int SmsSegments);
 
 public sealed record Dashboard(
     int CallsToday, int BookedToday,
     int Calls7Days, int Booked7Days,
     int CallsMonth, int BilledMinutesMonth, int FailedMonth,
     int InProgress,
+    int SmsMonth, int SmsSegmentsMonth, int FailedNotifications,
     IReadOnlyList<ClinicMonth> PerClinic,
     IReadOnlyList<CallRow> Recent);
 
@@ -37,7 +39,7 @@ public sealed record CallPage(IReadOnlyList<CallRow> Rows, int Total, int Page, 
     public int Pages => Math.Max(1, (Total + PageSize - 1) / PageSize);
 }
 
-public sealed record CallInfo(CallRow Row, string CallSid, string? Transcript);
+public sealed record CallInfo(CallRow Row, string CallSid, string? Transcript, IReadOnlyList<Notification> Notifications);
 
 public sealed class DashboardQueries(IDbContextFactory<SlotifyDbContext> dbFactory, TimeProvider time)
 {
@@ -61,19 +63,39 @@ public sealed class DashboardQueries(IDbContextFactory<SlotifyDbContext> dbFacto
 
         var names = await db.Clinics.AsNoTracking().ToDictionaryAsync(c => c.Id, c => c.Name, ct);
 
+        // Τα SMS χρεώνονται ανά κομμάτι, οπότε μετράμε και τα κομμάτια. Μόνο όσα στάλθηκαν
+        // και μόνο από κλήσεις: τα δοκιμαστικά του διαχειριστικού δεν χρεώνονται στο ιατρείο.
+        var sms = await db.Notifications
+            .Where(n => n.Channel == NotificationChannel.Sms && n.SentAt != null && n.SentAt >= monthStart && n.CallId != null)
+            .GroupBy(n => n.ClinicId)
+            .Select(g => new { ClinicId = g.Key, Count = g.Count(), Segments = g.Sum(n => n.Segments ?? 1) })
+            .ToDictionaryAsync(x => x.ClinicId, ct);
+
+        var failedNotifications = await db.Notifications
+            .CountAsync(n => n.SentAt == null && n.Attempts >= Notification.MaxAttempts && n.CreatedAt >= weekStart, ct);
+
         var month = calls.Where(c => c.StartedAt >= monthStart).ToList();
         var week = calls.Where(c => c.StartedAt >= weekStart).ToList();
         var day = calls.Where(c => c.StartedAt >= todayStart).ToList();
 
         var perClinic = month
-            .GroupBy(c => c.ClinicId)
-            .Select(g => new ClinicMonth(
-                g.Key,
-                names.GetValueOrDefault(g.Key, "(διαγραμμένο)"),
-                g.Count(),
-                g.Count(c => c.Outcome == CallOutcome.AppointmentBooked),
-                g.Count(c => c.Outcome == CallOutcome.Failed),
-                g.Where(c => c.EndedAt is not null).Sum(c => Display.BilledMinutes((c.EndedAt!.Value - c.StartedAt).TotalSeconds))))
+            .Select(c => c.ClinicId)
+            .Concat(sms.Keys)
+            .Distinct()
+            .Select(id =>
+            {
+                var g = month.Where(c => c.ClinicId == id).ToList();
+                var s = sms.GetValueOrDefault(id);
+                return new ClinicMonth(
+                    id,
+                    names.GetValueOrDefault(id, "(διαγραμμένο)"),
+                    g.Count,
+                    g.Count(c => c.Outcome == CallOutcome.AppointmentBooked),
+                    g.Count(c => c.Outcome == CallOutcome.Failed),
+                    g.Where(c => c.EndedAt is not null).Sum(c => Display.BilledMinutes((c.EndedAt!.Value - c.StartedAt).TotalSeconds)),
+                    s?.Count ?? 0,
+                    s?.Segments ?? 0);
+            })
             .OrderByDescending(x => x.Calls)
             .ToList();
 
@@ -86,6 +108,9 @@ public sealed class DashboardQueries(IDbContextFactory<SlotifyDbContext> dbFacto
             BilledMinutesMonth: perClinic.Sum(x => x.BilledMinutes),
             FailedMonth: month.Count(c => c.Outcome == CallOutcome.Failed),
             InProgress: day.Count(c => c.Outcome == CallOutcome.InProgress),
+            SmsMonth: perClinic.Sum(x => x.Sms),
+            SmsSegmentsMonth: perClinic.Sum(x => x.SmsSegments),
+            FailedNotifications: failedNotifications,
             PerClinic: perClinic,
             Recent: (await SearchAsync(new CallFilter(), 1, 8, ct)).Rows);
     }
@@ -131,7 +156,11 @@ public sealed class DashboardQueries(IDbContextFactory<SlotifyDbContext> dbFacto
         var clinicName = await db.Clinics.Where(c => c.Id == call.ClinicId).Select(c => c.Name).FirstOrDefaultAsync(ct);
         var row = new CallRow(call.Id, call.ClinicId, clinicName ?? "(διαγραμμένο)", call.FromNumber,
             call.StartedAt, call.EndedAt, call.Outcome, call.Summary);
-        return new CallInfo(row, call.CallSid, call.Transcript);
+        var notifications = await db.Notifications.AsNoTracking()
+            .Where(n => n.CallId == id)
+            .OrderBy(n => n.CreatedAt)
+            .ToListAsync(ct);
+        return new CallInfo(row, call.CallSid, call.Transcript, notifications);
     }
 
     private static IQueryable<CallRow> Project(SlotifyDbContext db, IQueryable<Call> q) =>
