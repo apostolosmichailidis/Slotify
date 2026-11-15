@@ -23,12 +23,13 @@ public static class DatabaseInitializer
         await AdoptEnsureCreatedDatabaseAsync(db, logger, ct);
 
         // Σε ολοκαίνουργια βάση το EF γράφει μία φορά «fail ... __EFMigrationsHistory» πριν φτιάξει τον πίνακα. Δεν πειράζει.
-        var pending = (await db.Database.GetPendingMigrationsAsync(ct)).ToList();
-        if (pending.Count > 0)
-        {
-            await db.Database.MigrateAsync(ct);
-            logger.LogInformation("Η βάση ενημερώθηκε: {Migrations}", string.Join(", ", pending));
-        }
+        var before = (await db.Database.GetAppliedMigrationsAsync(ct)).ToHashSet();
+        if (db.Database.GetMigrations().All(before.Contains)) return;
+
+        // Αν ξεκινήσουν μαζί Voice και Admin, η μία περιμένει το κλείδωμα του EF και η άλλη περνάει τα migrations.
+        // Το log λέει μόνο σε ποια μορφή είναι η βάση μετά, όχι ποια εφαρμογή την ενημέρωσε.
+        await db.Database.MigrateAsync(ct);
+        logger.LogInformation("Η βάση είναι στο {Migration}", db.Database.GetMigrations().Last());
     }
 
     /// <summary>
